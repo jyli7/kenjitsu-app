@@ -5,15 +5,18 @@ import importlib.util
 import json
 import os
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).parent))
 spec = importlib.util.spec_from_file_location('kenjitsu_app', Path(__file__).with_name('app.py'))
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
+providers = mod.providers
 
 FLAW = {'prompt': 'Which step is wrong?', 'rubric': 'Step 2 confuses keys.',
         'exhibit': {'title': 'A proof', 'steps': ['a', 'b', 'c']}, 'flaw_step': 2}
@@ -51,6 +54,9 @@ class KenjitsuTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ['KENJITSU_DATA'] = self.tmp.name
         os.environ['KENJITSU_OPENROUTER_API_KEY'] = 'test'
+        os.environ['KENJITSU_PROVIDERS'] = 'openrouter'
+        for name in ('KENJITSU_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY'):
+            os.environ.pop(name, None)
         os.environ.pop('VIBEBOX_TELEMETRY_API_KEY', None)
         mod.calls.clear()
         mod.prefetching.clear()
@@ -361,6 +367,162 @@ class KenjitsuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({r['focus'] for r in rows}, {'core'})
         self.assertEqual([(r['module'], r['title']) for r in subjects],
                          [('bayes', "Bayes' theorem and base rates"), ('', 'T2')])
+
+    async def test_chain_falls_back_to_the_anthropic_api(self):
+        import anthropic
+        import httpx2
+        os.environ['KENJITSU_PROVIDERS'] = 'openrouter,anthropic'
+        os.environ['KENJITSU_ANTHROPIC_API_KEY'] = 'test-key'
+        sent = []
+
+        def anthropic_handler(request):
+            sent.append((dict(request.headers), json.loads(request.content)))
+            reply = json.dumps(grade(7))
+            events = [
+                ('message_start', {'type': 'message_start', 'message': {
+                    'id': 'msg_1', 'type': 'message', 'role': 'assistant',
+                    'model': 'claude-opus-5-5', 'content': [], 'stop_reason': None,
+                    'stop_sequence': None, 'usage': {'input_tokens': 5, 'output_tokens': 1}}}),
+                ('content_block_start', {'type': 'content_block_start', 'index': 0,
+                                         'content_block': {'type': 'text', 'text': ''}}),
+                *[('content_block_delta', {'type': 'content_block_delta', 'index': 0,
+                   'delta': {'type': 'text_delta', 'text': reply[i:i + 9]}})
+                  for i in range(0, len(reply), 9)],
+                ('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
+                ('message_delta', {'type': 'message_delta', 'delta': {
+                    'stop_reason': 'end_turn', 'stop_sequence': None},
+                    'usage': {'output_tokens': 40}}),
+                ('message_stop', {'type': 'message_stop'})]
+            body = ''.join(f'event: {e}\ndata: {json.dumps(d)}\n\n' for e, d in events)
+            return httpx2.Response(200, text=body, headers={'content-type': 'text/event-stream'})
+
+        provider = providers.PROVIDERS['anthropic']
+        provider._client = anthropic.AsyncAnthropic(
+            api_key='test-key', base_url='http://anthropic.test', max_retries=0,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(anthropic_handler)))
+        failing = 0
+
+        async def openrouter_down(request):
+            nonlocal failing
+            failing += 1
+            return httpx.Response(503, text='overloaded')
+
+        await mod.client.aclose()
+        mod.client = httpx.AsyncClient(transport=httpx.MockTransport(openrouter_down))
+        try:
+            self.assertEqual([p['name'] for p in (await self.web.get('/health')).json()[
+                'providers']], ['openrouter', 'anthropic'])
+            sid = (await self.web.post('/api/sessions', json={'module': 'bayes'})).json()['id']
+            s = await self.answer(sid)
+            self.assertEqual(s['rounds'][0]['score'], 7)
+            headers, body = next((h, b) for h, b in sent if 'CURRENT ROUND' in
+                                 b['messages'][0]['content'])
+            self.assertEqual((body['model'], body['output_config'], body['fallbacks']),
+                             ('claude-opus-5-5', {'effort': 'low'}, 'default'))
+            self.assertIn('server-side-fallback-2026-07-01', headers['anthropic-beta'])
+            self.assertTrue(body['system'].startswith('You are Kenjitsu'))
+            self.assertNotIn('temperature', body)
+            self.assertGreaterEqual(failing, 2)  # OpenRouter tried twice before falling back.
+        finally:
+            await provider._client.close()
+            provider._client = None
+            await self.settle()
+
+    def fake_cli(self, script):
+        path = Path(self.tmp.name) / 'fake-cli'
+        path.write_text(f'#!{sys.executable}\n' + script)
+        path.chmod(0o755)
+        return path
+
+    async def test_claude_cli_adapter(self):
+        record = Path(self.tmp.name) / 'claude.json'
+        os.environ['KENJITSU_CLAUDE_BIN'] = str(self.fake_cli(f"""
+import json, sys
+json.dump({{'args': sys.argv[1:], 'stdin': sys.stdin.read()}}, open({str(record)!r}, 'w'))
+print(json.dumps({{'type': 'system', 'subtype': 'init'}}))
+for piece in ['{{"ok"', ': true}}']:
+    print(json.dumps({{'type': 'stream_event', 'event': {{'type': 'content_block_delta',
+          'delta': {{'type': 'text_delta', 'text': piece}}}}}}), flush=True)
+print('not json')
+print(json.dumps({{'type': 'result', 'subtype': 'success', 'is_error': False,
+                  'result': '{{"ok": true}}'}}))
+"""))
+        os.environ['KENJITSU_CLAUDE_CLI_MODEL'] = 'opus'
+        seen = []
+
+        async def on_text(text):
+            seen.append(text)
+
+        try:
+            out = await providers.PROVIDERS['claude-cli'].stream(
+                'SYSTEM', 'PROMPT', max_tokens=100, effort='low', on_text=on_text, http=None)
+        finally:
+            for name in ('KENJITSU_CLAUDE_BIN', 'KENJITSU_CLAUDE_CLI_MODEL'):
+                os.environ.pop(name)
+        self.assertEqual((out, seen), ('{"ok": true}', ['{"ok"', '{"ok": true}']))
+        call = json.loads(record.read_text())
+        self.assertEqual(call['stdin'], 'PROMPT')
+        args = call['args']
+        self.assertEqual(args[args.index('--system-prompt') + 1], 'SYSTEM')
+        self.assertEqual(args[args.index('--tools') + 1], '')
+        self.assertEqual((args[args.index('--model') + 1], args[args.index('--effort') + 1]),
+                         ('opus', 'low'))
+        self.assertIn('--no-session-persistence', args)
+
+    async def test_cli_errors_raise(self):
+        os.environ['KENJITSU_CLAUDE_BIN'] = str(self.fake_cli(
+            "import json\nprint(json.dumps({'type': 'result', 'subtype': 'error_during_execution',"
+            " 'is_error': True}))\n"))
+        try:
+            with self.assertRaises(providers.ProviderError):
+                await providers.PROVIDERS['claude-cli'].stream(
+                    'S', 'P', max_tokens=1, effort=None, on_text=None, http=None)
+        finally:
+            os.environ.pop('KENJITSU_CLAUDE_BIN')
+
+    async def test_codex_cli_adapter(self):
+        record = Path(self.tmp.name) / 'codex.json'
+        os.environ['KENJITSU_CODEX_BIN'] = str(self.fake_cli(f"""
+import json, sys
+args = sys.argv[1:]
+spec = next(a for a in args if a.startswith('model_instructions_file='))
+instructions = open(json.loads(spec.split('=', 1)[1])).read()
+json.dump({{'args': args, 'stdin': sys.stdin.read(), 'instructions': instructions}},
+          open({str(record)!r}, 'w'))
+for event in [{{'type': 'thread.started'}},
+              {{'type': 'item.completed', 'item': {{'type': 'reasoning', 'text': 'hmm'}}}},
+              {{'type': 'item.completed', 'item': {{'type': 'agent_message', 'text': '{{}}'}}}},
+              {{'type': 'turn.completed'}}]:
+    print(json.dumps(event))
+"""))
+        try:
+            out = await providers.PROVIDERS['codex-cli'].stream(
+                'SYSTEM', 'PROMPT', max_tokens=100, effort=None, on_text=None, http=None)
+        finally:
+            os.environ.pop('KENJITSU_CODEX_BIN')
+        call = json.loads(record.read_text())
+        self.assertEqual((out, call['stdin'], call['instructions']), ('{}', 'PROMPT', 'SYSTEM'))
+        self.assertIn('read-only', call['args'])
+        self.assertFalse(any('model_reasoning_effort' in a for a in call['args']))
+
+    async def test_provider_configuration(self):
+        os.environ['KENJITSU_PROVIDERS'] = 'auto'
+        os.environ['KENJITSU_CLAUDE_BIN'] = '/nonexistent/claude'
+        os.environ['KENJITSU_CODEX_BIN'] = '/nonexistent/codex'
+        try:
+            self.assertEqual([p.name for p in providers.configured()], list(providers.AUTO_ORDER))
+            self.assertEqual([p.name for p in providers.chain()], ['openrouter'])
+            os.environ['KENJITSU_PROVIDERS'] = 'claude-cli, openrouter'
+            self.assertEqual([p.name for p in providers.chain()], ['openrouter'])
+            os.environ['KENJITSU_PROVIDERS'] = 'openrouter,gpt'
+            with self.assertRaises(ValueError):
+                providers.configured()
+            os.environ['KENJITSU_PROVIDERS'] = 'anthropic'
+            response = await self.web.post('/api/sessions', json={'topic': 'raft'})
+            self.assertEqual(response.status_code, 503)  # No Anthropic key: no examiner.
+        finally:
+            os.environ.pop('KENJITSU_CLAUDE_BIN')
+            os.environ.pop('KENJITSU_CODEX_BIN')
 
     async def test_peek_reads_partial_grades(self):
         self.assertEqual(mod.peek('', 10), {'stage': 'reading'})

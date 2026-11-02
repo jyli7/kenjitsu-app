@@ -20,11 +20,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import providers
+
 HERE = Path(__file__).parent
 STATIC = HERE / 'static'
 MODULES = {m['id']: m for m in json.loads((HERE / 'modules.json').read_text())}
-OPENROUTER = 'https://openrouter.ai/api/v1/chat/completions'
-MODEL = os.getenv('KENJITSU_MODEL', 'anthropic/claude-sonnet-5.5')
 COOKIE = 'kj_uid'
 # (kind, label, what the examiner should write for that round)
 ROUNDS = [
@@ -176,6 +176,9 @@ def backfill_subjects() -> None:
 async def lifespan(app):
     global client
     init_db()
+    # Fail readiness on a misspelled provider rather than at the first fight.
+    log.warning('examiner providers: %s', ', '.join(
+        f"{p.name}{'' if p.available() else ' (unavailable)'}" for p in providers.configured()))
     # Closing the last connection to a WAL database checkpoints and fsyncs it (~150ms here).
     # Holding one open makes each request's own connection cheap to close.
     keeper = connect()
@@ -269,10 +272,6 @@ def spend_call(uid: str, ip: str, *, enforce: bool = True) -> None:
 
 # --- Model calls ---
 
-def api_key() -> str:
-    return os.getenv('KENJITSU_OPENROUTER_API_KEY', '').strip()
-
-
 def parse_json(text: str) -> dict:
     text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text.strip())
     start, end = text.find('{'), text.rfind('}')
@@ -281,63 +280,37 @@ def parse_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-async def stream_text(messages: list[dict], max_tokens: int, on_text,
-                      effort: str | None) -> tuple[str, str | None]:
-    # Output length dominates latency, so stream and let callers show progress as it arrives.
-    text_so_far, finish = '', None
-    async with client.stream('POST', OPENROUTER, headers={
-        'Authorization': f'Bearer {api_key()}',
-        'HTTP-Referer': 'https://kenjitsu.expt.sh', 'X-Title': 'Kenjitsu',
-    }, json={'model': MODEL, 'messages': messages, 'temperature': 0.5,
-             'max_tokens': max_tokens, 'stream': True}
-            | ({'reasoning': {'effort': effort}} if effort else {})) as response:
-        if response.status_code >= 400:
-            await response.aread()
-            response.raise_for_status()
-        async for line in response.aiter_lines():
-            if not line.startswith('data:'):
-                continue  # Blank separators and keep-alive comments.
-            data = line[5:].strip()
-            if data == '[DONE]':
-                break
-            chunk = json.loads(data)
-            if chunk.get('error'):
-                raise ValueError('upstream stream error')
-            for choice in chunk.get('choices') or []:
-                finish = choice.get('finish_reason') or finish
-                piece = (choice.get('delta') or {}).get('content')
-                if piece:
-                    text_so_far += piece
-                    if on_text:
-                        await on_text(text_so_far)
-    return text_so_far, finish
-
-
 async def complete(prompt: str, validate, *, max_tokens: int = 4000, on_text=None,
                    on_retry=None, effort: str | None = 'low'):
-    # Sonnet reasons adaptively by default, which can take 10s before the first visible word
-    # and spend the whole token budget. Low effort skips it; only flaw-planting keeps it.
-    if not api_key():
+    """One examiner call through the provider chain, validated into the caller's shape.
+
+    `effort='low'` skips most adaptive reasoning, which can add ~10s before the first word;
+    `None` keeps the provider's default depth (used to plant the flaw).
+    """
+    chain = providers.chain()
+    if not chain:
         raise HTTPException(503, 'The examiner is not configured.')
-    messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': prompt}]
+    # The first provider gets a second try (a malformed reply is usually a one-off); the rest
+    # of the chain are fallbacks for when it fails.
+    attempts = [chain[0], *chain]
     started = time.monotonic()
-    for attempt in range(2):
-        finish = None
+    for attempt, provider in enumerate(attempts):
+        if attempt and on_retry:
+            await on_retry()
         try:
-            output, finish = await stream_text(messages, max_tokens, on_text, effort)
+            output = await provider.stream(SYSTEM, prompt, max_tokens=max_tokens, effort=effort,
+                                           on_text=on_text, http=client)
             result = validate(parse_json(output))
-            emit('llm_call', model=MODEL, ok=True, attempts=attempt + 1,
-                 latency_ms=int((time.monotonic() - started) * 1000))
+            emit('llm_call', provider=provider.name, model=provider.model, ok=True,
+                 attempts=attempt + 1, latency_ms=int((time.monotonic() - started) * 1000))
             return result
-        except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
-            # Exception text is our own validation message or a JSON position, never content.
-            log.warning('model call failed (attempt %d): %s: %s; finish=%s', attempt + 1,
-                        type(exc).__name__, str(exc)[:120], finish)
+        except Exception as exc:  # Provider, HTTP, SDK, process and validation failures alike.
+            # Exception text is our own message, a status line or a JSON position, never content.
+            log.warning('model call failed (attempt %d, %s): %s: %s', attempt + 1,
+                        provider.name, type(exc).__name__, str(exc)[:120])
             error = exc
-            if attempt == 0 and on_retry:
-                await on_retry()
-    emit('llm_call', model=MODEL, ok=False, error=type(error).__name__,
-         latency_ms=int((time.monotonic() - started) * 1000))
+    emit('llm_call', provider=attempts[-1].name, ok=False, error=type(error).__name__,
+         attempts=len(attempts), latency_ms=int((time.monotonic() - started) * 1000))
     raise HTTPException(502, 'The examiner stumbled. Please try that again.')
 
 
@@ -948,7 +921,10 @@ class AnswerRequest(BaseModel):
 def health():
     with closing(connect()) as conn:
         conn.execute('SELECT 1')
-    return {'ok': True, 'modules': len(MODULES), 'examiner': bool(api_key())}
+    chain = providers.chain()
+    return {'ok': True, 'modules': len(MODULES), 'examiner': bool(chain),
+            'providers': [{k: v for k, v in p.describe().items() if k != 'available'}
+                          for p in chain]}
 
 
 @app.get('/')

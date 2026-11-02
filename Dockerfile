@@ -2,7 +2,7 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py modules.json ./
+COPY app.py providers.py modules.json ./
 COPY static ./static
 RUN mkdir -p /data && useradd -u 10001 kenjitsu && chown kenjitsu /data
 USER kenjitsu
