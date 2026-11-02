@@ -1,0 +1,122 @@
+[
+  {
+    "id": "consistent-hashing",
+    "title": "Consistent hashing",
+    "category": "Interviews",
+    "source": "System design",
+    "blurb": "Why hash rings exist, what virtual nodes fix, and what breaks when the cluster changes.",
+    "brief": "Core: map keys and nodes onto the same hash space (a ring); a key belongs to the first node clockwise. Adding/removing one of N nodes remaps only ~1/N of keys, versus nearly all keys with hash(key) mod N. Virtual nodes (many points per physical node) smooth load imbalance and let heterogeneous machines take proportional shares. Replication: store on the next R distinct physical nodes clockwise. Common mistakes: claiming it balances load perfectly without vnodes; forgetting that hot keys are not fixed by hashing; confusing it with sharding by range; thinking removal moves keys to random nodes (they move to the successor only); ignoring that mod N remapping is the actual motivation. Good knobs: one node much bigger than others, node failure with replication, hot key, very few nodes, jump/rendezvous hashing as alternatives.",
+    "opener": "Your cache cluster uses `server = hash(key) % N`. Explain, without jargon, what goes wrong when you add a fifth server to four, and how consistent hashing changes that. Be concrete about roughly what fraction of keys move in each scheme and why.",
+    "rubric": "Mod N: changing N changes almost every key's server (about N/(N+1) or ~80% of keys move going 4->5), causing a cache stampede. Consistent hashing: keys and servers on a ring, key goes to next server clockwise; adding a server only takes keys from the arc between it and its predecessor, ~1/5 of keys. Strong answers explain WHY (position depends on key and neighbor, not N) and may mention uneven arcs without virtual nodes."
+  },
+  {
+    "id": "rate-limiter",
+    "title": "Designing a rate limiter",
+    "category": "Interviews",
+    "source": "System design",
+    "blurb": "Token buckets, sliding windows, and what happens when you go distributed.",
+    "brief": "Algorithms: fixed window counter (simple, allows 2x burst at window boundaries), sliding window log (exact, memory per request), sliding window counter (weighted approximation of two windows), token bucket (capacity = burst size, refill rate = sustained rate; allows bursts), leaky bucket (smooths output to a constant rate, queues or drops). Distributed concerns: shared state (e.g. Redis INCR with TTL or Lua for atomic check-and-decrement), race conditions from read-then-write, clock skew, per-node local limits with approximate global limits, failure mode (fail open vs fail closed). Response: HTTP 429 with Retry-After. Common mistakes: confusing token bucket burst with rate; ignoring boundary burst in fixed windows; non-atomic get/set; forgetting key choice (user, IP, API key) and its abuse implications.",
+    "opener": "Explain how a token bucket rate limiter works as if to a product manager. What do its two settings control, and what does a user actually experience if they've been idle for an hour and then send 50 requests at once?",
+    "rubric": "Two settings: bucket capacity (max burst) and refill rate (sustained requests/sec). Each request removes a token; empty bucket => reject (429) or wait. After an hour idle the bucket is full (capped at capacity, not an hour of accumulated tokens), so the first `capacity` requests pass immediately, then the rest are limited to the refill rate. Key insight: tokens cap at capacity."
+  },
+  {
+    "id": "cap-theorem",
+    "title": "CAP theorem and consistency",
+    "category": "Interviews",
+    "source": "Distributed systems",
+    "blurb": "What CAP actually says, what it doesn't, and where PACELC picks up.",
+    "brief": "CAP: when a network partition occurs, a replicated system must choose between consistency (linearizability: every read sees the latest write) and availability (every request to a non-failed node gets a non-error response). Without a partition you can have both; the real everyday tradeoff is latency vs consistency (PACELC: if Partition then A or C, Else Latency or Consistency). 'CA' is not a meaningful choice for distributed systems because partitions are not optional. Consistency models: linearizable > sequential > causal > eventual; read-your-writes and monotonic reads are session guarantees. Quorums: R + W > N gives overlapping read/write sets (but not full linearizability without more care). Common mistakes: treating CAP's C as ACID's C; saying a system 'picks two of three' permanently; thinking eventual consistency means data can be lost; assuming quorums alone prevent all anomalies (sloppy quorums, concurrent writes, clock-based last-write-wins).",
+    "opener": "People often say \"CAP means pick two of three.\" Explain in plain words what the theorem actually says, and why that slogan is misleading. Use a concrete two-datacenter example.",
+    "rubric": "The choice only arises during a network partition: a node that can't reach its peer must either refuse/stall requests (consistent, not available) or answer with possibly stale data / accept divergent writes (available, not consistent). Without a partition both are possible. Partitions aren't optional, so 'CA' isn't a real option for a distributed system. Concrete example with two datacenters losing their link. Bonus: the normal-operation tradeoff is latency vs consistency (PACELC); CAP's C is linearizability, not ACID consistency."
+  },
+  {
+    "id": "bias-variance",
+    "title": "Bias–variance tradeoff",
+    "category": "Interviews",
+    "source": "Machine learning",
+    "blurb": "Underfitting, overfitting, and what more data, regularization and model size really do.",
+    "brief": "Expected test error (squared loss) = bias^2 + variance + irreducible noise. Bias: error from wrong assumptions; the average model over many training sets is still off. Variance: sensitivity to the particular training sample. More data reduces variance, not bias. Regularization (L2, dropout, early stopping) trades a little bias for less variance. More model capacity typically lowers bias and raises variance, though modern overparameterized networks show double descent, where test error can fall again past the interpolation threshold. Diagnosis: high training error => bias; low training error but large train/val gap => variance. Ensembling (bagging) reduces variance; boosting primarily reduces bias. Common mistakes: saying more data fixes underfitting; equating bias with dataset/social bias; claiming the tradeoff is a strict law in deep learning; misreading learning curves.",
+    "opener": "Explain the bias–variance tradeoff without using the words \"bias\", \"variance\", \"overfitting\" or \"underfitting\". Use a concrete example of fitting a model to data, and say what happens to each kind of error as the model gets more flexible.",
+    "rubric": "One error source: the model family is too rigid to capture the true pattern, so even averaged over many training sets it's systematically wrong (e.g. a straight line through curved data). The other: the model is so flexible it chases noise in the particular sample, so retraining on a new sample gives a very different fit. As flexibility increases, the systematic error falls and the sample-sensitivity error rises; total test error is often U-shaped. Must avoid the banned words and stay concrete."
+  },
+  {
+    "id": "self-attention",
+    "title": "Self-attention in transformers",
+    "category": "Interviews",
+    "source": "Machine learning",
+    "blurb": "Queries, keys and values, the √d scaling, masking, and the quadratic cost.",
+    "brief": "Each token produces query, key and value vectors via learned projections. Attention weights = softmax(QK^T / sqrt(d_k)); output = weights times V, so each token's output is a weighted mix of all tokens' values. sqrt(d_k) scaling keeps dot products from growing with dimension and saturating softmax (vanishing gradients). Multi-head attention runs several smaller attention operations in parallel subspaces. Causal masking sets future positions to -inf before softmax for autoregressive decoding. Attention itself is permutation-equivariant; positional encodings (sinusoidal, learned, RoPE) inject order. Cost is O(n^2) time and memory in sequence length; KV caching avoids recomputing keys/values for previous tokens during generation. Common mistakes: thinking attention weights are fixed parameters; confusing keys with values; forgetting softmax is per query row; believing attention knows word order without positional information.",
+    "opener": "Explain what self-attention computes for one word in a sentence, in plain language, as if to a software engineer who has never studied ML. What role do the query, key and value play, and why are they three different things?",
+    "rubric": "For one token: its query is compared (dot product) with every token's key to get relevance scores; softmax turns scores into weights summing to 1; the output is the weighted sum of the tokens' values. Separate roles: the query is what this token is looking for, the key is what each token advertises for matching, the value is the content it contributes when chosen. Separating matching (Q/K) from content (V) lets a token be found for one reason and contribute different information. All three are learned projections of the token embedding."
+  },
+  {
+    "id": "lsat-conditionals",
+    "title": "Necessary vs. sufficient conditions",
+    "category": "Exams",
+    "source": "LSAT logical reasoning",
+    "blurb": "Contrapositives, the two classic fallacies, and the language traps that hide them.",
+    "brief": "'If A then B' (A -> B): A is sufficient for B, B is necessary for A. Valid inferences: A therefore B (modus ponens); not-B therefore not-A (contrapositive / modus tollens). Invalid: B therefore A (affirming the consequent / mistaken reversal); not-A therefore not-B (denying the antecedent / mistaken negation). Indicator words: 'if', 'all', 'every', 'whenever' introduce sufficient conditions; 'only if', 'only', 'requires', 'must', 'unless' (A unless B = if not B then A) introduce necessary conditions. 'Only if' reverses direction relative to 'if'. Chains: A -> B and B -> C give A -> C. Common mistakes: translating 'only if' like 'if'; mishandling 'unless'; treating necessary conditions as guarantees; negating 'some' and 'all' incorrectly.",
+    "opener": "Explain the difference between a necessary condition and a sufficient condition in your own words, using one everyday example. Then: if \"you may enter only if you have a ticket,\" what can you conclude about someone who has a ticket, and why?",
+    "rubric": "Sufficient: being true guarantees the result. Necessary: required for the result but doesn't guarantee it. 'Enter only if ticket' = Enter -> Ticket; a ticket is necessary, not sufficient. Someone with a ticket: nothing follows about whether they may enter (concluding they can enter is the mistaken reversal). Strong answers name the direction explicitly."
+  },
+  {
+    "id": "bayes",
+    "title": "Bayes' theorem and base rates",
+    "category": "Exams",
+    "source": "Statistics, MCAT and AP",
+    "blurb": "Why a 99% accurate test can still be mostly wrong, and how priors move.",
+    "brief": "P(H|E) = P(E|H) P(H) / P(E). Base rate (prior) matters: for a rare condition, even an accurate test yields many false positives because the healthy population is so large. Sensitivity = P(positive | disease); specificity = P(negative | healthy); positive predictive value = P(disease | positive) depends on prevalence. Natural frequencies (out of 10,000 people...) make it intuitive. Repeated independent tests multiply likelihood ratios; independence assumptions matter. Common mistakes: base-rate neglect; confusing P(E|H) with P(H|E) (the prosecutor's fallacy); assuming specificity and sensitivity are the same; treating a second test as independent when errors are correlated.",
+    "opener": "A disease affects 1 in 1,000 people. A test catches 99% of true cases and has a 1% false-positive rate. Your friend tests positive and panics. Explain to them, without the formula, roughly how likely it is they have the disease and why the number is so far from 99%.",
+    "rubric": "Natural frequencies: of 100,000 people, 100 are sick and ~99 test positive; 99,900 are healthy and ~999 test positive falsely. Positive predictive value ≈ 99/(99+999) ≈ 9%. The test accuracy answers 'given sick, positive?' not 'given positive, sick?'; because healthy people vastly outnumber sick people, false positives dominate. Answers far from ~9% or that just restate accuracy are wrong."
+  },
+  {
+    "id": "price-ceilings",
+    "title": "Supply, demand and price ceilings",
+    "category": "Courses",
+    "source": "Intro microeconomics",
+    "blurb": "Shortages, deadweight loss and who actually wins from rent control.",
+    "brief": "Equilibrium where quantity supplied equals quantity demanded. A binding price ceiling (below equilibrium) creates a shortage: quantity demanded rises, quantity supplied falls; actual quantity traded is the smaller supplied quantity. Consequences: deadweight loss (trades worth more to buyers than they cost sellers no longer happen), non-price rationing (queues, search costs, discrimination, quality decline, black markets), transfer from producers to the consumers who still get the good. A non-binding ceiling (above equilibrium) does nothing. Elasticity determines magnitude: shortages grow over time as supply becomes more elastic (long run, e.g. less new housing). Common mistakes: confusing shift of a curve with movement along it; saying ceilings above equilibrium cause shortages; assuming all consumers benefit; ignoring time horizon.",
+    "opener": "A city caps rents below the market rate. Explain, step by step and without diagrams, what happens to the number of apartments people want, the number available, and who ends up better or worse off. Don't just say \"a shortage\" — explain the mechanism.",
+    "rubric": "Lower price: more people want apartments (quantity demanded up) and landlords offer fewer / build fewer / convert units (quantity supplied down), so demand exceeds supply. Units get allocated by non-price means: waiting lists, connections, search costs, discrimination, side payments, lower maintenance. Winners: tenants who get/keep a controlled unit. Losers: landlords, and renters who can't find one; some mutually beneficial rentals disappear (deadweight loss). Long-run effect bigger than short-run because supply adjusts slowly."
+  },
+  {
+    "id": "natural-selection",
+    "title": "Natural selection",
+    "category": "Courses",
+    "source": "Intro biology",
+    "blurb": "Variation, heritability, differential reproduction — and the misconceptions that sneak in.",
+    "brief": "Requirements: variation among individuals, heritability of that variation, and differential reproductive success linked to the variation. Result: heritable traits that increase reproductive success become more common in a population over generations. Populations evolve; individuals do not. Mutations are random with respect to need; selection is not random. Fitness means reproductive success in a specific environment, not strength or health. Other mechanisms: genetic drift (strong in small populations), gene flow, sexual selection. Trade-offs and constraints mean organisms are not optimally designed. Common mistakes: Lamarckian 'organisms adapt because they need to'; teleology ('in order to'); thinking acquired traits are inherited; 'survival of the fittest' as strongest; confusing antibiotic resistance as individual bacteria getting used to the drug.",
+    "opener": "Explain how a population of bacteria becomes resistant to an antibiotic, as if to someone who believes \"the bacteria get used to the drug.\" Show exactly where their picture goes wrong.",
+    "rubric": "Before treatment the population already varies; a few bacteria carry mutations (random, not caused by the drug) that confer resistance. The antibiotic kills most susceptible bacteria; resistant ones survive and reproduce, passing on the gene (heritability), so the next population is mostly resistant. Individual bacteria don't 'get used to' or adapt; the population's composition changes. Bonus: horizontal gene transfer, stopping antibiotics early leaves the partly resistant survivors."
+  },
+  {
+    "id": "mean-value-theorem",
+    "title": "The mean value theorem",
+    "category": "Courses",
+    "source": "Calculus",
+    "blurb": "Fight it like Halmos: is every hypothesis necessary? What about the degenerate case?",
+    "brief": "If f is continuous on [a, b] and differentiable on (a, b), there is c in (a, b) with f'(c) = (f(b) - f(a)) / (b - a): somewhere the instantaneous rate equals the average rate. Rolle's theorem is the special case f(a) = f(b). Hypotheses matter: |x| on [-1, 1] fails differentiability at 0 and no c works; a function with a jump discontinuity fails continuity. The theorem is existential and says nothing about how to find c or how many there are. Consequences: f' = 0 on an interval implies f constant; f' > 0 implies increasing; bounds like |sin a - sin b| <= |a - b|. Common mistakes: requiring differentiability at endpoints; thinking c is unique or the midpoint; forgetting it's about the open interval; misapplying it to functions on non-intervals.",
+    "opener": "State the mean value theorem in plain language using a car trip as the example. Then, Halmos-style: which hypothesis does the car trip story quietly assume, and what does it mean physically?",
+    "rubric": "If you drive 120 miles in 2 hours (average 60 mph), at some instant your speedometer read exactly 60. Hypotheses: position is continuous (no teleporting) and differentiable (velocity defined at every moment, no instant jumps in direction/sharp corners). The story assumes the speed changes continuously; strong answers note the theorem guarantees existence, not where or how many such instants."
+  },
+  {
+    "id": "thinking-fast-slow",
+    "title": "Thinking, Fast and Slow",
+    "category": "Books",
+    "source": "Daniel Kahneman (2011)",
+    "blurb": "System 1 and 2, anchoring, availability, loss aversion — can you apply them, not just name them?",
+    "brief": "Ideas only (no text): System 1 is fast, automatic, associative, effortless; System 2 is slow, deliberate, effortful and lazy, often endorsing System 1's answers (bat-and-ball problem). Heuristics: anchoring (arbitrary numbers bias estimates), availability (ease of recall stands in for frequency), representativeness (stereotype similarity overrides base rates; Linda problem / conjunction fallacy). WYSIATI: what you see is all there is, confidence comes from coherence not evidence quantity. Prospect theory: outcomes evaluated as gains/losses relative to a reference point; losses loom ~2x larger than gains (loss aversion); diminishing sensitivity; risk-seeking in losses, risk-averse in gains; framing effects. Experiencing vs remembering self: peak-end rule and duration neglect (colonoscopy study). Planning fallacy and the outside view (reference class forecasting). Regression to the mean (flight instructors). Caveat: some priming studies cited in the book failed to replicate, which Kahneman acknowledged.",
+    "opener": "Explain the difference between System 1 and System 2 as Kahneman uses it, then explain why the bat-and-ball problem (a bat and ball cost $1.10; the bat costs $1.00 more than the ball) trips up smart people. What exactly fails, and which system fails?",
+    "rubric": "System 1: automatic, fast, intuitive, always on. System 2: effortful, deliberate, can check System 1 but is lazy. Bat-and-ball: System 1 instantly proposes 10 cents; System 2 doesn't bother to check (10 + 110 = 120 ≠ 110). Correct answer 5 cents. The failure is System 2's laziness/failure to monitor, not inability to do arithmetic. Strong answers note the intuitive answer feels right, which is why it isn't checked."
+  },
+  {
+    "id": "kenjitsu-essay",
+    "title": "Kenjitsu, the essay",
+    "category": "Books",
+    "source": "James Somers (2010)",
+    "blurb": "The idea behind this app. Can you fight the essay that told you to fight everything?",
+    "brief": "Ideas only: Somers contrasts reading novels (can be swallowed whole) with math texts (must be fought). Quotes Paul Halmos: 'Don't just read it; fight it! Ask your own questions, look for your own examples, discover your own proofs. Is the hypothesis necessary? Is the converse true? What happens in the classical special case? What about the degenerate cases? Where does the proof use the hypothesis?' Analogy: a programmer understands code by running it with varied inputs, tracing, adding print statements, until they could rewrite it. Hunch: this generalizes beyond math, but the hard part is breaking passivity and knowing which questions to ask outside math. Tenets of 'kenjitsu' (ken = range of knowledge, jitsu = fighting art): be the pestering student, restate in your own words, read at the speed of understanding; read with a pen and make margin notes that harass the author, specific and contentful rather than 'yes' or 'interesting'; think like Feynman, translate claims into concrete reality ('that would mean...', the T. rex head through the window); generate counterexamples and know which knobs to turn in thought experiments, like philosophers and lawyers; be adversarial, steelman the opposite position; explain stuff and write up uncomfortable ideas to expose holes. Commenters: one suggests 'write' as a seventh tenet; one offers the bullshit-detector questions 'So what?' and 'Specify.'; one objects to coining a pseudo-Japanese term.",
+    "opener": "Somers borrows the analogy of a programmer reading someone else's code. Explain what that analogy says reading should look like, then give a concrete example of doing it with a non-math claim, such as a sentence from a news article.",
+    "rubric": "Programmer doesn't read code top to bottom; runs it, varies inputs, traces execution, inspects state, until they could rewrite it. For reading: actively test claims, probe edge cases, translate into your own terms, try to reconstruct. A strong example takes a specific claim and shows concrete 'runs': plugging in numbers, a counterexample, asking what it would imply, what would need to be true. Vague 'think critically' answers score low."
+  }
+]

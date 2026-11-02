@@ -1,0 +1,10 @@
+.git
+__pycache__
+.venv
+data
+*.db*
+.env
+test_app.py
+README.md
+CLAUDE.md
+deploy.sh
