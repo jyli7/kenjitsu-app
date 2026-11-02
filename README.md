@@ -13,12 +13,12 @@ a structured match, and no flattery.
 
 - [How a fight works](#how-a-fight-works)
 - [Subjects, focuses and belts](#subjects-focuses-and-belts)
-- [Quick start](#quick-start)
+- [Quick start](#quick-start) · [Local development](#local-development)
 - [Model providers](#model-providers): API keys and CLI subscriptions
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
 - [Privacy](#privacy)
-- [Development](#development) · [Deployment](#deployment)
+- [Deployment](#deployment)
 
 ## How a fight works
 
@@ -70,21 +70,19 @@ averaged) and history. Your record lists every subject.
 
 ## Quick start
 
+You need Python 3.11+ and one way to reach a model: an API key, or a logged-in `claude` or
+`codex` CLI.
+
 ```bash
-git clone git@github.com:TheBuilderJR/kenjitsu.git && cd kenjitsu
+git clone https://github.com/TheBuilderJR/kenjitsu.git && cd kenjitsu
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# Pick at least one provider (see Model providers below), for example:
-export KENJITSU_ANTHROPIC_API_KEY=sk-ant-...    # an API key, or
-claude auth login                               # a Claude subscription via Claude Code, or
-codex login                                     # a ChatGPT subscription via Codex CLI
-
-KENJITSU_DATA=./data uvicorn app:app --port 8140
-open http://localhost:8140
+export KENJITSU_ANTHROPIC_API_KEY=sk-ant-...   # or just be logged in to `claude` / `codex`
+KENJITSU_DATA=./data uvicorn app:app --reload --port 8140
 ```
 
-`GET /health` shows which providers Kenjitsu found. With none available, pages and modules
-still load, but starting a fight returns 503.
+Open http://localhost:8140 and pick a module. Everything runs on your machine; you don't need
+access to the production servers. [Local development](#local-development) covers the details.
 
 ## Model providers
 
@@ -242,17 +240,116 @@ Every response carries a `Server-Timing` header; `reveal` breaks its time down b
 - **Copyrighted material:** the built-in book modules contain ideas only, never the book's
   text.
 
-## Development
+## Local development
+
+Kenjitsu is one FastAPI process, a SQLite file and a static page with no build step. Everything
+below runs on a laptop (macOS or Linux; on Windows, use WSL). You don't need SSH access to
+the hosting servers: deploying is the only step that does.
+
+### 1. Set up
 
 ```bash
+git clone https://github.com/TheBuilderJR/kenjitsu.git && cd kenjitsu
+python3 --version                      # 3.11 or newer
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python test_app.py               # 16 tests; the model and the CLIs are mocked
-node --check static/app.js
-ruff check .
+cp .env.example .env                   # git-ignored; holds your keys
 ```
 
-When CSS or JS changes, bump the `?v=` query strings in `static/index.html`: static files
-are served with long-lived immutable caching.
+`uv` works too: `uv venv && uv pip install -r requirements.txt`.
+
+### 2. Give it a model
+
+Edit `.env` and enable **one** of these. Anything you configure is picked up automatically,
+in the order described in [Model providers](#model-providers).
+
+| You have | Do this | Cost |
+|---|---|---|
+| An Anthropic API key | `KENJITSU_ANTHROPIC_API_KEY=sk-ant-...` | Per token (a fight is roughly 10–15 calls) |
+| An OpenRouter key | `KENJITSU_OPENROUTER_API_KEY=sk-or-...` | Per token |
+| An OpenAI key, or a local model server | `KENJITSU_OPENAI_API_KEY`, `KENJITSU_OPENAI_MODEL`, and `KENJITSU_OPENAI_BASE_URL` for a non-OpenAI server | Per token, or free locally |
+| A Claude Pro/Max plan | Install [Claude Code](https://code.claude.com), then run `claude auth login` | Your plan's usage limits |
+| A ChatGPT plan | Install [Codex CLI](https://github.com/openai/codex), then run `codex login` | Your plan's usage limits |
+
+With several configured, set `KENJITSU_PROVIDERS` (for example `claude-cli` or
+`anthropic,claude-cli`) to choose which is used, and in what order.
+
+### 3. Run it
+
+```bash
+set -a; source .env; set +a            # load your settings into this shell
+uvicorn app:app --reload --port 8140
+```
+
+- **Check it found a model:** open http://localhost:8140/health. `"examiner": true` and
+  the `providers` list confirm a model is available.
+- **Fight:** open http://localhost:8140.
+- **Reload behavior:** `--reload` restarts the server when Python files change. Edits to
+  `static/` only need a browser refresh: there's no bundler, and caching only applies in
+  production.
+- **Data:** everything you do locally is stored in `./data/kenjitsu.db`. Delete `./data` to
+  start fresh. Your profile is a browser cookie, so a private window gives you a second learner.
+
+### 4. Or run it in Docker
+
+This uses the same image as production. The CLI providers aren't installed in the image, so
+use an API key here.
+
+```bash
+docker build -t kenjitsu .
+docker run --rm -p 8140:8140 --env-file .env -e KENJITSU_DATA=/data \
+  -v kenjitsu-data:/data kenjitsu
+```
+
+The named volume keeps your data between runs. The container runs as uid 10001, so a named
+volume avoids permission problems with a bind-mounted folder.
+
+### 5. Test and check
+
+```bash
+python test_app.py                     # the full suite; the model and the CLIs are mocked
+node --check static/app.js             # syntax check (needs Node)
+pip install ruff && ruff check .       # lint, configured in ruff.toml
+```
+
+The tests need no keys, no network and no CLI installed. They exercise whole fights,
+streaming, prefetching, subjects and belts, and every provider adapter against mocked
+providers and fake CLI binaries. Run them before opening a pull request.
+
+### Where to change things
+
+| Change | File |
+|---|---|
+| Questions, grading rules, pushback, scoring | `SYSTEM` and `ROUNDS` near the top of `app.py`, and `grade_turn()` |
+| Built-in modules (topic, brief, fixed opener, rubric) | `modules.json`: add an entry, no code needed |
+| Subjects, focuses, belts, suggestions | The "Subjects" section of `app.py` |
+| A new model provider | `providers.py`: subclass `Provider`, add it to `PROVIDERS` |
+| UI, screens, styling | `static/app.js`, `static/style.css`, `static/index.html` |
+
+When you change `static/app.js` or `static/style.css`, also bump their `?v=` query strings
+in `static/index.html`. Production serves static files with immutable caching, so the new
+query string is what makes browsers fetch the change.
+
+### Contributing
+
+1. Branch from `main`.
+2. Make your change, and run the tests and checks above.
+3. Open a pull request on GitHub, with a short note on how you tested it (for UI changes, what
+   you clicked through).
+
+A maintainer merges it and deploys it (see [Deployment](#deployment)). Never commit `.env`,
+`data/` or any key.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Starting a fight says *The examiner is not configured* (503) | No provider is available. Check `/health`, that you ran `set -a; source .env; set +a` in the same shell, or that `claude`/`codex` is on your `PATH` and logged in. |
+| *The examiner stumbled* (502) | Every provider failed. The server log names the provider and the error type. Common causes: a wrong key or model name, a usage limit, or a CLI that isn't logged in. |
+| `Unknown provider(s) in KENJITSU_PROVIDERS` at startup | Use names from the provider table: `openrouter`, `anthropic`, `openai`, `claude-cli`, `codex-cli`. |
+| `AttributeError: module 'datetime' has no attribute 'UTC'` | Python is older than 3.11. Recreate the venv with a newer Python. |
+| `Address already in use` | Another process has port 8140: use `--port 8141`. |
+| *That is enough fighting for one day* (429) | The local daily limit. Raise `KENJITSU_SESSIONS_PER_DAY` in `.env`, or delete `./data`. |
 
 ## Deployment
 

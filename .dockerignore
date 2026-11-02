@@ -8,3 +8,4 @@ test_app.py
 README.md
 CLAUDE.md
 deploy.sh
+.env.example

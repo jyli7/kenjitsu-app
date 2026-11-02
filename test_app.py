@@ -63,6 +63,7 @@ class KenjitsuTests(unittest.IsolatedAsyncioTestCase):
         mod.drafts.clear()
         mod.subject_tasks.clear()
         mod.locks.clear()
+        mod.stopping = False
         mod.init_db()
         self.grades = []
         self.question_failures = 0
@@ -523,6 +524,23 @@ for event in [{{'type': 'thread.started'}},
         finally:
             os.environ.pop('KENJITSU_CLAUDE_BIN')
             os.environ.pop('KENJITSU_CODEX_BIN')
+
+    async def test_shutdown_cancels_background_work(self):
+        started = asyncio.Event()
+
+        async def slow_model_call():
+            started.set()
+            await asyncio.sleep(60)
+
+        task = mod.spawn(slow_model_call())
+        await started.wait()
+        await mod.stop_background()
+        self.assertTrue(task.cancelled())
+        self.assertEqual(mod.background, set())
+        late = mod.spawn(asyncio.sleep(60))  # Nothing new starts once shutdown has begun.
+        with self.assertRaises(asyncio.CancelledError):
+            await late
+        mod.stopping = False
 
     async def test_peek_reads_partial_grades(self):
         self.assertEqual(mod.peek('', 10), {'stage': 'reading'})

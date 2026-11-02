@@ -91,6 +91,9 @@ log = logging.getLogger('kenjitsu')
 client: httpx.AsyncClient
 locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 calls: defaultdict[str, deque] = defaultdict(deque)
+# Background work (grading, prefetching, telemetry), held so it can be cancelled on shutdown.
+background: set[asyncio.Task] = set()
+stopping = False
 # Questions written in the background: session -> kind -> (task, rematch basis).
 prefetching: dict[str, dict[str, tuple[asyncio.Task, list | None]]] = {}
 # Questions finished before their round exists: session -> kind -> (question, basis).
@@ -186,6 +189,7 @@ async def lifespan(app):
         try:
             yield
         finally:
+            await stop_background()
             keeper.close()
 
 
@@ -212,6 +216,25 @@ def mark(request: Request, name: str):
         yield
     finally:
         request.state.marks.append((name, (time.perf_counter() - started) * 1000))
+
+
+def spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    background.add(task)
+    task.add_done_callback(background.discard)
+    if stopping:
+        task.cancel()  # Shutting down: start nothing new (it would outlive the HTTP client).
+    return task
+
+
+async def stop_background() -> None:
+    # Cancel in-flight model calls (killing any CLI subprocess) before the client closes.
+    global stopping
+    stopping = True
+    while background:
+        for task in list(background):
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
 
 
 def now() -> str:
@@ -241,7 +264,7 @@ async def _emit(event: str, data: dict) -> None:
 
 
 def emit(event: str, **data) -> None:
-    asyncio.create_task(_emit(event, data))
+    spawn(_emit(event, data))
 
 
 # --- Limits ---
@@ -774,7 +797,7 @@ def start_subject_work(subject_id: str, uid: str) -> None:
         # Go again once it finishes: a fight may have ended since it read the history.
         rerun_subjects.add(subject_id)
         return
-    task = asyncio.create_task(prepare_subject(subject_id, uid))
+    task = spawn(prepare_subject(subject_id, uid))
     subject_tasks[subject_id] = task
 
     def done(t):
@@ -963,7 +986,7 @@ async def start(body: StartRequest, request: Request, response: Response):
         state = await start_custom(body, request, uid)
     save(state)
     if state['module'] == 'custom' and not state.get('brief'):
-        asyncio.create_task(prepare_custom(state['id'], uid))  # Plans the subject after.
+        spawn(prepare_custom(state['id'], uid))  # Plans the subject after.
     else:
         plan_prefetch(state)
         start_subject_work(state['subject'], uid)
@@ -1109,7 +1132,7 @@ def plan_prefetch(state: dict) -> None:
         if kind in ready or kind in tasks:
             continue
         basis = graded if kind == 'retest' else None
-        task = asyncio.create_task(prefetch(sid, state['uid'], kind, copy.deepcopy(state), basis))
+        task = spawn(prefetch(sid, state['uid'], kind, copy.deepcopy(state), basis))
         prefetching.setdefault(sid, {})[kind] = (task, basis)
         task.add_done_callback(lambda t, kind=kind: forget(sid, kind, t))
 
@@ -1277,7 +1300,7 @@ async def answer(sid: str, body: AnswerRequest, request: Request, response: Resp
         lock.release()
         raise
     events: asyncio.Queue = asyncio.Queue()
-    asyncio.create_task(run_answer(state, body, events, lock))
+    spawn(run_answer(state, body, events, lock))
     if not stream:
         while True:
             kind, data = await events.get()
