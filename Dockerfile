@@ -7,4 +7,4 @@ COPY static ./static
 RUN mkdir -p /data && useradd -u 10001 kenjitsu && chown kenjitsu /data
 USER kenjitsu
 EXPOSE 8140
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8140", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8140", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "30"]

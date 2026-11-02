@@ -9,3 +9,5 @@ README.md
 CLAUDE.md
 deploy.sh
 .env.example
+docker-compose.yml
+scripts

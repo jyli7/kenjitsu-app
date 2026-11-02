@@ -353,30 +353,38 @@ A maintainer merges it and deploys it (see [Deployment](#deployment)). Never com
 
 ## Deployment
 
-Production runs on the vibe-mono platform (omarchy). Requests flow:
+Production is self-contained: the repo's own `docker-compose.yml`, run on one host (omarchy),
+behind the shared Caddy edge proxy on do-box. Requests flow:
 
-> Cloudflare → Caddy (do-box) → HAProxy `:18140` → active slot (8140 or 28140)
+> Cloudflare → Caddy (do-box) → replica **a** (`:19140`), or replica **b** (`:19141`) when a
+> is down
 
-Rollouts are health-gated and zero-downtime. This repository holds the app; vibe-mono holds
-only its hosting registration:
-
-| vibe-mono file | What it holds |
-|---|---|
-| `docker-compose.yml` → `kenjitsu` | Build context `../kenjitsu`, data volume, environment, `cpus: 1` |
-| `apps/kenjitsu/deploy.sh` | Adapter: syncs this repo to omarchy, builds it, rolls it out |
-| `infra/deploy/remote-services.json`, omarchy `infra/deploy/services.json` | Execution host, ports, `/health` |
-| `infra/deploy/workspaces.json` → `kenjitsu` | do-box `/root/kenjitsu` → omarchy `~/Projects/kenjitsu` |
-| `infra/Caddyfile` | `kenjitsu.expt.sh` and `kenjitsu.experiment.sh`; the answer stream unbuffered |
+The two replicas run the same image and share one SQLite database. Caddy sends traffic to
+the first healthy replica, and retries a refused connection on the other. `deploy.sh`
+replaces them one at a time, so deploys don't take the site down. Each replica gets 45 s to
+finish in-flight grading before it stops.
 
 ```bash
-bash deploy.sh    # from do-box: sync, build, health-gated rollout
-python3 /root/vibe-mono/scripts/remote_deploy.py kenjitsu --status
+./deploy.sh            # sync this checkout to the host, build, rolling restart
+./deploy.sh status     # replica state
+./deploy.sh logs 200   # recent logs from both replicas
+./deploy.sh test       # run the tests and lint on the host
 ```
 
-Production uses the `openrouter` adapter. Compose passes `KENJITSU_PROVIDERS` and the
-provider keys through, falling back to the platform's `QUIZCHAT_OPENROUTER_API_KEY`. Live
-data is `vibe-mono/data/kenjitsu/kenjitsu.db` on omarchy (uid 10001). Never copy a local
-database over it.
+`deploy.sh` needs SSH access to the host. Collaborators without it open a pull request,
+and a maintainer deploys it.
+
+| Where | What |
+|---|---|
+| Host `~/Projects/kenjitsu/` | Deployed copy of this repo. `deploy.sh` syncs tracked files only. |
+| Host `~/Projects/kenjitsu/.env` | Production settings and keys, not in git. Includes `KENJITSU_BIND` (the host's Tailscale IP). |
+| Host `~/Projects/kenjitsu/data/` | Live `kenjitsu.db` (uid 10001). `data/archive/` holds the pre-split copies. Never copy a local database over it. |
+| `scripts/rollout.sh` | Runs on the host: build, then replace `kenjitsu-a`, then `kenjitsu-b`, each health-gated |
+| Caddy `kenjitsu.expt.sh` block (the `vibe-mono` repo's `infra/Caddyfile`, installed at `/etc/caddy/Caddyfile` on do-box) | Hostnames, both upstreams, health checks, the unbuffered answer stream |
+| Host firewall | Lets only do-box reach the replicas' network (`172.30.94.0/24`, port 8140) |
+
+Production uses the `openrouter` provider. To change providers or models, edit the host's
+`.env` and run `./deploy.sh`.
 
 ## Credits
 

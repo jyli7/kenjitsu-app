@@ -1,0 +1,39 @@
+# Production runs this on omarchy (see README, "Deployment"); it also works locally.
+# Two identical replicas share one SQLite database. Caddy sends traffic to the first
+# healthy one, so deploy.sh can replace them one at a time without downtime.
+x-kenjitsu: &kenjitsu
+  image: kenjitsu:latest
+  env_file: .env
+  environment:
+    KENJITSU_DATA: /data
+  volumes:
+    - ./data:/data
+  restart: unless-stopped
+  cpus: 1
+  mem_limit: 256m
+  stop_grace_period: 45s  # In-flight grading finishes before a replica stops.
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8140/health')"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+
+services:
+  kenjitsu-a:
+    <<: *kenjitsu
+    build: .
+    container_name: kenjitsu-a
+    ports:
+      - "${KENJITSU_BIND:-127.0.0.1}:19140:8140"
+  kenjitsu-b:
+    <<: *kenjitsu
+    container_name: kenjitsu-b
+    ports:
+      - "${KENJITSU_BIND:-127.0.0.1}:19141:8140"
+
+networks:
+  default:
+    ipam:
+      config:
+        # Fixed so the host firewall can allow the edge proxy to reach it.
+        - subnet: ${KENJITSU_SUBNET:-172.30.94.0/24}
