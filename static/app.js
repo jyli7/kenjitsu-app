@@ -34,6 +34,8 @@ const OPENING = [
   [7000, 'Almost there: checking the question is fair and unambiguous'],
 ];
 let modules = null;
+let blueprints = [];
+let creatorSeed = null; // Pending topic/notes when jumping from Home into the Creator Studio.
 let category = 'All';
 let session = null;
 let focus = 0;
@@ -119,53 +121,77 @@ async function renderHome() {
   setNav('home');
   document.title = 'Kenjitsu — don’t just read it, fight it';
   const [loaded, mine] = await Promise.all([
-    modules ? null : api('/api/modules').catch((e) => { toast(e.message); return {modules: []}; }),
+    api('/api/modules').catch((e) => { toast(e.message); return {modules: modules || [], blueprints: []}; }),
     api('/api/subjects').catch(() => ({subjects: []}))]);
-  if (loaded) modules = loaded.modules;
+  if (loaded) {
+    modules = loaded.modules || [];
+    blueprints = loaded.blueprints || [];
+  }
   const subjects = mine.subjects;
-  const cats = ['All', ...new Set(modules.map((m) => m.category))];
+  const allItems = [...blueprints, ...modules];
+  const cats = ['All', ...new Set(allItems.map((m) => m.category))];
   view.innerHTML = `
   <section class="hero">
     <div>
       <p class="eyebrow">The art of <span class="seal-text">knowledge-fighting</span></p>
       <h1>You read it.<br><em>Now fight it.</em></h1>
-      <p class="lede">Kenjitsu grills you on what you just studied. Five rounds of hard questions,
-        changed constraints and planted flaws — graded strictly, with no flattery. Find out whether
-        you actually know it before the interview, exam or conversation does.</p>
+      <p class="lede">Kenjitsu grills you on what you want to learn and remember. Hard questions,
+        changed constraints and planted flaws — with Socratic stepping stones when you get stuck
+        and strict grading with no flattery.</p>
     </div>
     <blockquote class="halmos">“Don’t just read it; fight it! Ask your own questions, look for your own examples, discover your own proofs. Is the hypothesis necessary? Is the converse true?”<cite>— Paul Halmos</cite></blockquote>
   </section>
-  <form class="arena" id="custom">
-    <label class="big" for="topic">What do you want to be grilled on?</label>
-    <div class="topic-row">
-      <input id="topic" maxlength="300" autocomplete="off" placeholder="Raft consensus · chapter 4 of Sapiens · the Krebs cycle · Black–Scholes">
-      <button class="btn primary" type="submit">Grill me <span aria-hidden="true">→</span></button>
-    </div>
-    <details class="notes-toggle">
-      <summary>Add your notes, syllabus or chapter outline</summary>
-      <textarea id="notes" maxlength="24000" placeholder="Paste your lecture notes, a syllabus, a paper's key sections, your highlights…"></textarea>
-      <div class="notes-meta"><span>Private to you. Used only to write and grade your questions.</span>
-        <span><label>Load a .txt or .md file<input type="file" id="file" accept=".txt,.md,.markdown,text/plain"></label> · <span id="count">0</span> / 24,000</span></div>
-    </details>
-  </form>
+  <section class="arena unified-arena" aria-label="Pick a fight">
+    <form class="arena-top-form" id="custom">
+      <label class="big" for="topic">Type anything you want to fight — or explore the Atlas below</label>
+      <div class="topic-row">
+        <div class="topic-input-wrap">
+          <input id="topic" maxlength="300" autocomplete="off" placeholder="Backpropagation · Raft consensus · chapter 4 of Sapiens · Black–Scholes">
+          <div class="kj-results" id="home-topic-results"></div>
+        </div>
+        <button class="btn" type="button" id="open-creator" title="Choose difficulty, add your teaching taste, and preview/edit every round">Customize fight ✎</button>
+        <button class="btn primary" type="submit">Quick fight <span aria-hidden="true">→</span></button>
+      </div>
+      <details class="notes-toggle">
+        <summary>Add your notes, syllabus or chapter outline</summary>
+        <textarea id="notes" maxlength="24000" placeholder="Paste your lecture notes, a syllabus, a paper's key sections, your highlights…"></textarea>
+        <div class="notes-meta"><span>Used to write and grade your questions — or click “Customize fight” above to inspect and edit every round first.</span>
+          <span><label>Load a .txt or .md file<input type="file" id="file" accept=".txt,.md,.markdown,text/plain"></label> · <span id="count">0</span> / 24,000</span></div>
+      </details>
+    </form>
+    <div class="arena-or-divider"><span>Or explore the Knowledge Atlas</span></div>
+    <div id="home-atlas"></div>
+  </section>
   ${subjects.length ? `<section class="resume" aria-labelledby="resume"><div class="section-head"><div><p class="eyebrow">Your subjects</p><h2 id="resume">Pick up where you left off</h2></div><a class="btn ghost" href="#/me">All of them →</a></div>
     <div class="subject-grid">${subjects.slice(0, 3).map(subjectCard).join('')}</div></section>` : ''}
+  ${blueprints.length ? `<section aria-labelledby="mods">
+    <div class="section-head">
+      <div><p class="eyebrow">Community &amp; Creator Fights</p><h2 id="mods">Custom-built fights</h2></div>
+      <div class="section-head-right">
+        <div class="chips" role="group" aria-label="Category">${cats.map((c) => `<button type="button" data-cat="${esc(c)}" aria-pressed="${c === category}">${esc(c)}</button>`).join('')}</div>
+        <a class="btn small primary" href="#/create">+ Create a fight</a>
+      </div>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>` : ''}
   <ol class="strip" aria-label="The five rounds">
     ${ROUND_COPY.map(([t, d], i) => `<li><span class="n">0${i + 1}</span><h3>${t}</h3><p>${d}</p></li>`).join('')}
   </ol>
-  <section aria-labelledby="mods">
-    <div class="section-head">
-      <div><p class="eyebrow">Or start with a module</p><h2 id="mods">Pick a fight</h2></div>
-      <div class="chips" role="group" aria-label="Category">${cats.map((c) => `<button type="button" data-cat="${esc(c)}" aria-pressed="${c === category}">${esc(c)}</button>`).join('')}</div>
-    </div>
-    <div class="grid" id="grid"></div>
-  </section>
   <section class="diff">
     <div><h3>Not flashcards</h3><p>Flashcards check that you can recall a fact. Kenjitsu checks whether the idea still works for you when the situation changes.</p></div>
-    <div><h3>Not a chatbot</h3><p>A structured match with a strict examiner. Vague answers get pushback, buzzwords get flagged, and nobody tells you “great question.”</p></div>
-    <div><h3>Your private record</h3><p>Every module you pass goes on your shelf, with your score, thinking time and percentile — visible only to you.</p></div>
+    <div><h3>Socratic when stuck, strict when graded</h3><p>Ask to break a round down and the examiner walks you through smaller stepping-stone questions — then makes you prove it unassisted in the Rematch.</p></div>
+    <div><h3>Human taste on top of AI</h3><p>Fork any fight, rewrite weak questions, tune the rubric, and share your version with other challengers.</p></div>
   </section>`;
-  renderGrid();
+  if (blueprints.length) renderGrid();
+  const homeAtlasHost = document.getElementById('home-atlas');
+  if (homeAtlasHost && window.mountKenjitsuAtlas) {
+    window.mountKenjitsuAtlas(homeAtlasHost, {
+      embedded: true,
+      externalInput: document.getElementById('topic'),
+      externalResults: document.getElementById('home-topic-results'),
+      onStartFight: (node, button) => launchAtlasNode(node, button),
+    });
+  }
   view.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
     category = b.dataset.cat;
     view.querySelectorAll('[data-cat]').forEach((x) => x.setAttribute('aria-pressed', x === b));
@@ -180,6 +206,11 @@ async function renderHome() {
     if (file.size > 400_000) { toast('That file is too large. Paste the key sections instead.'); return; }
     notes.value = (await file.text()).slice(0, 24000);
     notes.dispatchEvent(new Event('input'));
+  });
+  document.getElementById('open-creator').addEventListener('click', () => {
+    const topic = document.getElementById('topic').value.trim();
+    creatorSeed = {topic, notes: notes.value};
+    location.hash = '#/create';
   });
   document.getElementById('custom').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -212,19 +243,34 @@ async function renderHome() {
 
 function renderGrid() {
   const grid = document.getElementById('grid');
-  const shown = modules.filter((m) => category === 'All' || m.category === category);
-  grid.innerHTML = shown.map((m) => `
-    <button class="card" type="button" data-module="${esc(m.id)}">
-      <span class="cat">${esc(m.category)}</span>
+  const allItems = [...blueprints, ...modules];
+  const shown = allItems.filter((m) => category === 'All' || m.category === category);
+  grid.innerHTML = shown.map((m) => {
+    const isBp = Boolean(m.blueprint);
+    const badge = isBp ? `<span class="cat">${esc(m.category)} · ${esc(m.level || 'Core')}</span>` : `<span class="cat">${esc(m.category)}</span>`;
+    const votes = isBp && (m.upvotes || m.downvotes) ? ` · 👍 ${m.upvotes}` : '';
+    const statsText = m.attempts
+      ? `<span><b>${m.attempts}</b> ${m.attempts === 1 ? 'challenger' : 'challengers'} · <b>${Math.round(100 * m.passed / m.attempts)}%</b> passed${votes}</span>`
+      : `<span>Be the first challenger${votes}</span>`;
+    return `
+    <div class="card" data-card-id="${esc(m.id)}" data-is-bp="${isBp}">
+      <div class="card-top-row">${badge}<a class="card-fork" href="#/create?fork=${encodeURIComponent(m.id)}" title="Fork or edit this fight's questions and rubric">Fork / Edit ✎</a></div>
       <h3>${esc(m.title)}</h3>
-      <span class="src">${esc(m.source)}</span>
+      <span class="src">${esc(m.source)}${isBp && m.total_rounds ? ` · ${m.total_rounds} rounds` : ''}</span>
       <p>${esc(m.blurb)}</p>
-      <span class="stats">${m.attempts
-        ? `<span><b>${m.attempts}</b> ${m.attempts === 1 ? 'fight' : 'fights'} · <b>${Math.round(100 * m.passed / m.attempts)}%</b> passed</span>`
-        : '<span>Be the first to fight it</span>'}<span class="go">Fight →</span></span>
-    </button>`).join('') || '<p class="muted">No modules yet.</p>';
-  grid.querySelectorAll('[data-module]').forEach((card) => card.addEventListener('click', () => {
-    beginModule(modules.find((m) => m.id === card.dataset.module));
+      <span class="stats">${statsText}<span class="go">Challenge →</span></span>
+    </div>`;
+  }).join('') || '<p class="muted">No fights in this category yet.</p>';
+  grid.querySelectorAll('[data-card-id]').forEach((card) => card.addEventListener('click', (e) => {
+    if (e.target.closest('.card-fork')) return;
+    const id = card.dataset.cardId;
+    if (card.dataset.isBp === 'true') {
+      const bp = blueprints.find((x) => x.id === id);
+      if (bp) beginBlueprint(bp);
+    } else {
+      const m = modules.find((x) => x.id === id);
+      if (m) beginModule(m);
+    }
   }));
 }
 
@@ -237,8 +283,38 @@ async function begin(body, onError) {
     location.hash = `#/s/${created.id}`;
   } catch (e) {
     toast(e.message);
-    onError();
+    if (onError) onError();
   }
+}
+
+function beginBlueprint(bp) {
+  session = {id: null, module: `bp:${bp.id}`, blueprint_id: bp.id, title: bp.title, source: bp.source,
+    level: bp.level, status: 'active', thinking_ms: 0, total_rounds: bp.total_rounds || ROUND_COPY.length,
+    pass_score: 70, result: null,
+    rounds: [{kind: 'explain', label: 'Explain it simply', score: null, done: false, revealed: true, exhibit: null,
+      turns: [{question: bp.opener, answer: null, step: null, grade: null}]}]};
+  focus = 0;
+  showResults = false;
+  draft = '';
+  selectedStep = null;
+  questionShownAt = Date.now();
+  history.pushState(null, '', '#/s/new');
+  setNav('');
+  document.title = `${bp.title} — Kenjitsu`;
+  window.scrollTo(0, 0);
+  paintSession();
+  const pending = session;
+  creating = api('/api/sessions', {blueprint: bp.id}).then((created) => {
+    if (session === pending) {
+      session = created;
+      if (location.hash === '#/s/new') history.replaceState(null, '', `#/s/${created.id}`);
+      paintSession();
+    }
+  }).catch((e) => {
+    toast(e.message);
+    if (session === pending) location.hash = '#/';
+    throw e;
+  }).finally(() => { creating = null; });
 }
 
 // The opener is the same for everyone, so show it at once and create the session meanwhile.
@@ -476,19 +552,40 @@ function fightLabel(s) {
   return f.id === 'core' ? 'The core idea' : `Focus: ${f.title}`;
 }
 
+function roundLabel(s, i) {
+  const r = s.rounds[i];
+  if (r && r.label) return r.label;
+  return (ROUND_COPY[i] && ROUND_COPY[i][0]) || `Round ${i + 1}`;
+}
+
+function roundDesc(s, i) {
+  return (ROUND_COPY[i] && ROUND_COPY[i][1]) || 'Answer concretely with the underlying mechanism, not just labels.';
+}
+
+function forkTargetId(s) {
+  return s.blueprint_id || (s.module && s.module !== 'custom' ? s.module : s.id);
+}
+
 function paintSession() {
   const s = session;
-  const scored = s.rounds.filter((r) => r.done).reduce((a, r) => a + r.score * 2, 0);
+  const total = s.total_rounds || ROUND_COPY.length;
+  const doneRounds = s.rounds.filter((r) => r.done);
+  const scored = doneRounds.length ? Math.round(doneRounds.reduce((a, r) => a + r.score, 0) * (10 / total)) : 0;
+  const forkId = forkTargetId(s);
   view.innerHTML = `
   <div class="bar">
-    <div><p class="eyebrow">${s.subject ? `<a href="#/subject/${esc(s.subject)}">Subject map</a>` : 'Module'} · <span class="seal-text">${esc(fightLabel(s))}</span></p><h1>${esc(s.title)}</h1>${s.source ? `<div class="src">${esc(s.source)}</div>` : ''}</div>
-    <div class="clock"><div><span>Thinking time</span><b id="clock">${clock(thinkingNow())}</b></div><div><span>Score</span><b>${scored}<small class="muted">/100</small></b></div></div>
+    <div><p class="eyebrow">${s.subject ? `<a href="#/subject/${esc(s.subject)}">Subject map</a>` : 'Module'} · <span class="seal-text">${esc(fightLabel(s))}</span>${s.level ? ` · <span>${esc(s.level)}</span>` : ''}</p><h1>${esc(s.title)}</h1>${s.source ? `<div class="src">${esc(s.source)}</div>` : ''}</div>
+    <div class="clock">
+      ${forkId ? `<a class="btn small ghost" href="#/create?fork=${encodeURIComponent(forkId)}" title="Open this fight in the Creator Studio to inspect or edit its questions and rubrics">Fork / Edit fight ✎</a>` : ''}
+      <div><span>Thinking time</span><b id="clock">${clock(thinkingNow())}</b></div>
+      <div><span>Score</span><b>${scored}<small class="muted">/100</small></b></div>
+    </div>
   </div>
-  <ol class="ladder">${Array.from({length: s.total_rounds}, (_, i) => {
+  <ol class="ladder" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${Array.from({length: total}, (_, i) => {
     const r = s.rounds[i];
     const cls = r && r.done ? `done ${band(r.score)}` : '';
     const current = !showResults && i === focus ? 'current' : '';
-    const label = ROUND_COPY[i][0];
+    const label = roundLabel(s, i);
     const inner = `<span class="n">ROUND ${i + 1}</span><span class="l">${esc(label)}</span><span class="s">${r && r.done ? `${r.score}/10` : i === s.rounds.length - 1 && s.status === 'active' ? 'live' : '—'}</span>`;
     return `<li class="${cls} ${current}">${r && r.done ? `<button type="button" data-focus="${i}" aria-label="Review round ${i + 1}">${inner}</button>` : inner}</li>`;
   }).join('')}</ol>
@@ -529,16 +626,43 @@ function exhibitHtml(r, interactive) {
   return `${r.exhibit.title ? `<p class="exhibit-title">${esc(r.exhibit.title)}</p>` : ''}<ol class="exhibit">${steps}</ol>`;
 }
 
+function coachingHtml(r, open) {
+  const c = r.coaching;
+  if (!c) return '';
+  const stepsHtml = (c.steps || []).map((st, idx) => {
+    const isCurrent = open && !c.ready_for_main && idx === c.steps.length - 1 && !st.answer;
+    return `<div class="coach-step">
+      <div class="coach-q"><span class="coach-badge">Stepping stone ${idx + 1}</span> ${md(st.question)}</div>
+      ${st.answer ? `<div class="mine"><span class="who">Your stepping-stone reply</span>${esc(st.answer)}</div>` : ''}
+      ${st.feedback ? `<div class="coach-fb">${esc(st.feedback)}</div>` : ''}
+      ${isCurrent ? `<form class="coach-form" id="coaching-form">
+        <input id="coaching-input" maxlength="1200" autocomplete="off" placeholder="Answer this smaller question in 1–2 sentences…">
+        <button class="btn small primary" type="submit">Check step →</button>
+      </form>` : ''}
+    </div>`;
+  }).join('');
+  const readyBanner = c.ready_for_main && open
+    ? `<div class="coach-ready"><b>Pieces locked in.</b> Now put them together in your own words to answer the main round question below. <span class="muted">(Assisted rounds cap at 7/10 and are retested unassisted in the Rematch.)</span></div>`
+    : '';
+  return `<div class="coaching-box" id="coaching-box">
+    <div class="coaching-head"><span class="seal-text">↳ Socratic Breakdown</span> · <b>${esc(c.concept || 'Core Intuition')}</b></div>
+    <p class="coaching-intuition">${esc(c.intuition)}</p>
+    ${stepsHtml}
+    ${readyBanner}
+  </div>`;
+}
+
 function roundHtml(s, i) {
   const r = s.rounds[i];
-  const head = `<p class="eyebrow">Round ${i + 1} of ${s.total_rounds} · <span class="seal-text">${esc(ROUND_COPY[i][0])}</span></p>`;
+  const rLabel = roundLabel(s, i);
+  const head = `<p class="eyebrow">Round ${i + 1} of ${s.total_rounds} · <span class="seal-text">${esc(rLabel)}</span>${r.assisted ? ' · <span class="muted">Assisted (max 7/10)</span>' : ''}</p>`;
   if (!r.revealed && revealing) {
     return `<div class="panel gate">${head}<h2>Writing round ${i + 1}…</h2>
       <p>${esc(WRITING[r.kind] || 'Writing your next question.')}</p><div class="blade" style="margin:0 auto"></div>
       <p class="muted" style="font-size:12.5px;margin-top:16px">Your clock is paused until the question appears.</p></div>`;
   }
   if (!r.revealed) {
-    return `<div class="panel gate">${head}<h2>${esc(ROUND_COPY[i][0])}</h2><p>${esc(ROUND_COPY[i][1])}</p>
+    return `<div class="panel gate">${head}<h2>${esc(rLabel)}</h2><p>${esc(roundDesc(s, i))}</p>
       <button class="btn primary" type="button" id="reveal">Show the question <span aria-hidden="true">→</span></button>
       <p class="muted" style="font-size:12.5px;margin-top:14px">The clock runs only while a question is on screen and waiting for you.</p></div>`;
   }
@@ -550,20 +674,28 @@ function roundHtml(s, i) {
       ${t.grade ? `<div class="mine"><span class="who">Your answer${t.step && k === 0 ? ` · picked step ${t.step}` : ''}</span>${t.answer ? highlight(t.answer, t.grade.jargon) : '<em>Skipped</em>'}</div>${gradeHtml(t.grade)}` : ''}
     </div>`;
   }).join('');
+  const coachBlock = coachingHtml(r, open);
   let tail = '';
   if (open) {
     const flawFirst = r.kind === 'flaw' && r.turns.length === 1;
+    const canBreakdown = !r.coaching;
     tail = `<form class="answer-form" id="answer">
-      <label class="eyebrow" for="answer-text">${flawFirst ? 'Pick the flawed step above, then explain' : 'Your answer'}</label>
+      <label class="eyebrow" for="answer-text">${flawFirst ? 'Pick the flawed step above, then explain' : (r.coaching ? 'Your synthesis for the main question' : 'Your answer')}</label>
       <textarea id="answer-text" maxlength="4000" placeholder="${flawFirst ? 'Step N is wrong because… The correct reasoning is…' : 'Be concrete. Say why, not just what. “That would mean…”'}">${esc(draft)}</textarea>
       <div class="form-foot"><span class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to submit</span>
-        <span class="actions"><button class="btn ghost" type="button" id="skip">I don’t know</button><button class="btn primary" type="submit">Submit answer</button></span></div>
+        <span class="actions">
+          ${canBreakdown ? '<button class="btn" type="button" id="breakdown-btn" title="Get a 2-sentence intuition and a small stepping-stone question instead of guessing">Break this down (Teach me)</button>' : ''}
+          <button class="btn ghost" type="button" id="skip">Skip (0/10)</button>
+          <button class="btn primary" type="submit">Submit answer</button>
+        </span></div>
     </form>`;
   } else if (r.done) {
     const last = r.turns[r.turns.length - 1].grade;
     const model = last && last.model_answer ? `<div class="model"><span class="lab">A strong answer</span>${md(last.model_answer)}</div>` : '';
     const targets = r.targets ? `<p class="muted" style="font-size:12.5px;margin:14px 0 0">This rematch targeted: ${esc(r.targets)}</p>` : '';
-    const capped = r.turns.length > 1 && last && last.score > r.score ? `<span class="muted">Scored ${last.score}, capped at 8 after pushback.</span>` : '<span></span>';
+    const capped = r.assisted && last && last.score > r.score
+      ? `<span class="muted">Scored ${last.score}, capped at 7 after Socratic breakdown.</span>`
+      : (r.turns.length > 1 && last && last.score > r.score ? `<span class="muted">Scored ${last.score}, capped at 8 after pushback.</span>` : '<span></span>');
     let next = '';
     const upcoming = s.rounds[i + 1];
     const writing = upcoming && !upcoming.revealed && !upcoming.ready
@@ -572,19 +704,21 @@ function roundHtml(s, i) {
     else if (s.status === 'done') next = '<button class="btn primary" type="button" id="results">See your result <span aria-hidden="true">→</span></button>';
     tail = `${model}${targets}<div class="next-row">${capped}${next}</div>`;
   }
-  return `<div class="panel" id="round">${head}${turns}${tail}</div>`;
+  return `<div class="panel" id="round">${head}${turns}${coachBlock}${tail}</div>`;
 }
 
 function resultsHtml(s) {
   const res = s.result;
   let standing;
-  if (s.module === 'custom') standing = '<b>—</b><p>Custom topics aren’t ranked. Modules are.</p>';
-  else if (res.percentile === null) standing = `<b>—</b><p>Ranking unlocks once 5 others finish this module (${res.others} so far).</p>`;
+  if (s.module === 'custom') standing = '<b>—</b><p>One-off topics aren’t ranked. Save as a Fight Blueprint to rank challengers.</p>';
+  else if (res.percentile === null) standing = `<b>—</b><p>Ranking unlocks once 5 challengers finish this fight (${res.others} so far).</p>`;
   else standing = `<b>${res.percentile}<small>th</small></b><p>Ahead of ${res.percentile}% of ${res.others} other ${res.others === 1 ? 'attempt' : 'attempts'}, on score, then time.</p>`;
-  const bars = s.rounds.map((r, i) => `<li><span>${esc(ROUND_COPY[i][0])}</span><span class="track"><span class="fill ${band(r.score)}" style="display:block;width:${r.score * 10}%"></span></span><b>${r.score}/10</b></li>`).join('');
+  const bars = s.rounds.map((r, i) => `<li><span>${esc(roundLabel(s, i))}${r.assisted ? ' *' : ''}</span><span class="track"><span class="fill ${band(r.score)}" style="display:block;width:${r.score * 10}%"></span></span><b>${r.score}/10</b></li>`).join('');
   const gaps = res.gaps.length ? `<h3>What to go back to</h3><ul class="gaps">${res.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '<h3>Nothing obvious to go back to</h3><p class="muted">Every round scored 7 or more.</p>';
   const ranked = s.module !== 'custom';
   const again = ranked ? '<button class="btn" type="button" id="again">Fight it again (ranked)</button>' : '';
+  const forkId = forkTargetId(s);
+  const vote = s.user_vote || 0;
   return `<div class="panel result">
     <div class="stamp-wrap">
       <div class="stamp ${res.passed ? 'pass' : 'fail'}">${res.passed ? 'Passed' : 'Not yet'}</div>
@@ -595,9 +729,41 @@ function resultsHtml(s) {
       <h3>Round by round</h3><ol class="bars">${bars}</ol>
       ${gaps}
       <p class="rule">To pass: ${s.pass_score}+ overall and win the rematch (6+), proof that you fixed what tripped you up.</p>
+      <div class="taste-bar">
+        <span>How was this fight’s taste &amp; question quality?</span>
+        <div class="taste-actions">
+          <button type="button" class="btn small ${vote === 1 ? 'primary' : ''}" data-rate-vote="1">👍 Sharp &amp; fair</button>
+          <button type="button" class="btn small ${vote === -1 ? 'primary' : ''}" data-rate-vote="-1">👎 Confusing / unfair</button>
+          ${forkId ? `<a class="btn small ghost" href="#/create?fork=${encodeURIComponent(forkId)}">Fork &amp; improve questions ✎</a>` : ''}
+        </div>
+      </div>
       <div class="result-actions">${again}<a class="btn" href="#/me">Your record</a><a class="btn ghost" href="#/">All modules</a></div>
     </div></div>
     ${s.subject ? '<section class="panel whats-next" id="whats-next"><div class="planning"><div class="blade"></div><p>Loading what’s next…</p></div></section>' : ''}`;
+}
+
+async function requestBreakdown(replyText = '') {
+  if (busy) return;
+  if (creating) {
+    try { await creating; } catch { return; }
+  }
+  busy = true;
+  const btn = document.getElementById('breakdown-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Breaking this down…'; }
+  const cBtn = document.querySelector('#coaching-form button');
+  if (cBtn) { cBtn.disabled = true; cBtn.textContent = 'Checking…'; }
+  try {
+    session = await api(`/api/sessions/${encodeURIComponent(session.id)}/breakdown`, {answer: replyText});
+    questionShownAt = Date.now();
+    paintSession();
+    document.getElementById('coaching-box')?.scrollIntoView({behavior: 'smooth', block: 'center'});
+  } catch (e) {
+    toast(e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Break this down (Teach me)'; }
+    if (cBtn) { cBtn.disabled = false; cBtn.textContent = 'Check step →'; }
+  } finally {
+    busy = false;
+  }
 }
 
 function wireStage() {
@@ -627,16 +793,45 @@ function wireStage() {
   if (results) results.addEventListener('click', () => { showResults = true; paintSession(); });
   const again = document.getElementById('again');
   if (again) again.addEventListener('click', () => {
+    if (session.blueprint_id) {
+      const bp = blueprints.find((x) => x.id === session.blueprint_id);
+      if (bp) { beginBlueprint(bp); return; }
+      again.disabled = true;
+      begin({blueprint: session.blueprint_id}, () => { again.disabled = false; });
+      return;
+    }
     const m = modules && modules.find((x) => x.id === session.module);
     if (m) { beginModule(m); return; }
     again.disabled = true;
     begin({module: session.module}, () => { again.disabled = false; });
   });
+  view.querySelectorAll('[data-rate-vote]').forEach((b) => b.addEventListener('click', async () => {
+    const vote = Number(b.dataset.rateVote);
+    try {
+      await api(`/api/sessions/${encodeURIComponent(session.id)}/rate`, {vote});
+      session.user_vote = vote;
+      toast(vote > 0 ? 'Marked as sharp & fair.' : 'Feedback recorded — consider forking this fight to improve it!');
+      paintSession();
+    } catch (e) { toast(e.message); }
+  }));
   view.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => {
     selectedStep = Number(b.dataset.step);
     view.querySelectorAll('[data-step]').forEach((x) => x.setAttribute('aria-pressed', Number(x.dataset.step) === selectedStep));
     document.getElementById('answer-text').focus();
   }));
+  const breakdownBtn = document.getElementById('breakdown-btn');
+  if (breakdownBtn) breakdownBtn.addEventListener('click', () => requestBreakdown(''));
+  const coachingForm = document.getElementById('coaching-form');
+  if (coachingForm) {
+    const cInput = document.getElementById('coaching-input');
+    if (cInput) cInput.focus({preventScroll: true});
+    coachingForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const val = cInput.value.trim();
+      if (!val) { toast('Write a brief answer to the stepping-stone question.'); return; }
+      requestBreakdown(val);
+    });
+  }
   const form = document.getElementById('answer');
   if (!form) return;
   const area = document.getElementById('answer-text');
@@ -644,17 +839,24 @@ function wireStage() {
   area.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); form.requestSubmit(); }
   });
-  if (!('ontouchstart' in window)) area.focus({preventScroll: true});
+  if (!('ontouchstart' in window) && !coachingForm) area.focus({preventScroll: true});
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const answer = area.value.trim();
     const r = session.rounds[session.rounds.length - 1];
-    if (!answer) { toast('Write an answer, or press “I don’t know.”'); return; }
+    if (!answer) { toast('Write an answer, or click “Break this down (Teach me)” if you are stuck.'); return; }
+    // If the Challenger types a short cry for help ("help", "i don't know", "i don't understand") and hasn't used breakdown yet, offer stepping-stone coaching!
+    if (!r.coaching && answer.length < 110 && /\b(help|i don'?t know|idk|don'?t understand|confused|no idea|teach me|hand[- ]?wavy)\b/i.test(answer)) {
+      if (confirm('Want to break this round down with a quick intuition and a smaller stepping-stone question first instead of taking a 0?')) {
+        requestBreakdown('');
+        return;
+      }
+    }
     if (r.kind === 'flaw' && r.turns.length === 1 && !selectedStep) { toast('Pick the step you think is flawed.'); return; }
     submit(answer);
   });
   document.getElementById('skip').addEventListener('click', () => {
-    if (confirm('Skip this question? It scores 0, and you’ll see a strong answer.')) submit('');
+    if (confirm('Skip this question for 0/10, or click Cancel and press “Break this down (Teach me)” to work through it step by step?')) submit('');
   });
 }
 
@@ -850,17 +1052,530 @@ async function renderMe() {
   </tbody></table>` : '<p class="empty-note">No fights yet. <a href="#/">Pick one</a>.</p>'}`;
 }
 
+// --- Atlas ---
+
+async function launchAtlasNode(node, button) {
+  if (node.mod) {
+    if (!modules) {
+      try { modules = (await api('/api/modules')).modules; } catch { modules = []; }
+    }
+    const m = modules.find((x) => x.id === node.mod);
+    if (m) {
+      beginModule(m);
+      return;
+    }
+  }
+  const notes = node.q ? `Core focus question: ${node.q}${node.s ? ` (Source: ${node.s})` : ''}` : '';
+  await startFight(button, {topic: node.t, notes});
+}
+
+function renderAtlasPage() {
+  setNav('atlas');
+  document.title = 'Knowledge Atlas — Kenjitsu';
+  view.innerHTML = '<div id="atlas-page-host" class="atlas-page-host"></div>';
+  const host = document.getElementById('atlas-page-host');
+  if (host && window.mountKenjitsuAtlas) {
+    window.mountKenjitsuAtlas(host, {
+      embedded: false,
+      onStartFight: (node, button) => launchAtlasNode(node, button),
+    });
+  }
+}
+
+// --- Fight Creator & Forking Studio ---
+
+const KIND_OPTIONS = [
+  ['explain', 'Explain it simply (Core mechanism)'],
+  ['perturb', 'What if it changes? (Turn one knob)'],
+  ['flaw', 'Find the flaw (Step-by-step exhibit)'],
+  ['apply', 'New case (Transfer scenario)'],
+  ['custom', 'Custom angle (Creator-defined)'],
+  ['retest', 'Adaptive Rematch (Targets weakest round)'],
+];
+
+const LEVEL_OPTIONS = [
+  'Intuition / High School',
+  'Core / Undergrad',
+  'Practitioner / Interview',
+  'Advanced / Research',
+];
+
+const CAT_OPTIONS = [
+  'Interviews',
+  'Courses',
+  'Exams',
+  'AI & ML',
+  'Law & Policy',
+  'Science',
+  'Community',
+];
+
+let studio = null;
+let auditReport = null;
+
+function defaultStudioState(seed = {}) {
+  return {
+    id: null,
+    parent_id: null,
+    title: seed.topic || '',
+    category: 'Community',
+    source: '',
+    level: 'Core / Undergrad',
+    blurb: '',
+    taste_prompt: '',
+    brief: '',
+    notes: seed.notes || '',
+    published: true,
+    rounds: [
+      {kind: 'explain', label: 'Explain it simply', prompt: '', rubric: ''},
+      {kind: 'perturb', label: 'What if it changes?', prompt: '', rubric: ''},
+      {kind: 'flaw', label: 'Find the flaw', prompt: '', rubric: '', exhibit: {title: '', steps: ['', '', '']}, flaw_step: 2},
+      {kind: 'apply', label: 'New case', prompt: '', rubric: ''},
+      {kind: 'retest', label: 'Rematch', prompt: '', rubric: 'Adaptive rematch targeting the challenger’s weakest round.'},
+    ],
+  };
+}
+
+async function renderCreator(forkId = null, editId = null) {
+  setNav('create');
+  document.title = 'Create or Fork a Fight — Kenjitsu';
+  auditReport = null;
+  if (editId) {
+    view.innerHTML = '<p class="loading">Loading fight blueprint…</p>';
+    try {
+      studio = await api(`/api/blueprints/${encodeURIComponent(editId)}`);
+    } catch (e) {
+      toast(e.message);
+      studio = defaultStudioState();
+    }
+  } else if (forkId) {
+    view.innerHTML = '<p class="loading">Forking fight into Creator Studio…</p>';
+    try {
+      studio = await api(`/api/blueprints/fork/${encodeURIComponent(forkId)}`);
+    } catch (e) {
+      toast(e.message);
+      studio = defaultStudioState();
+    }
+  } else if (creatorSeed) {
+    studio = defaultStudioState(creatorSeed);
+    creatorSeed = null;
+  } else if (!studio) {
+    studio = defaultStudioState();
+  }
+  paintCreator();
+}
+
+function syncStudioFromDom() {
+  if (!studio) return;
+  const val = (id) => document.getElementById(id)?.value ?? '';
+  studio.title = val('st-title').trim();
+  studio.category = val('st-category') || 'Community';
+  studio.source = val('st-source').trim();
+  studio.level = val('st-level') || 'Core / Undergrad';
+  studio.blurb = val('st-blurb').trim();
+  studio.taste_prompt = val('st-taste').trim();
+  studio.brief = val('st-brief').trim();
+  studio.notes = val('st-notes');
+  view.querySelectorAll('[data-round-idx]').forEach((card) => {
+    const idx = Number(card.dataset.roundIdx);
+    const r = studio.rounds[idx];
+    if (!r) return;
+    r.kind = card.querySelector('.r-kind')?.value || r.kind;
+    r.label = card.querySelector('.r-label')?.value.trim() || r.label;
+    r.prompt = card.querySelector('.r-prompt')?.value ?? r.prompt;
+    r.rubric = card.querySelector('.r-rubric')?.value ?? r.rubric;
+    if (r.kind === 'flaw') {
+      const exTitle = card.querySelector('.r-ex-title')?.value.trim() || '';
+      const steps = [...card.querySelectorAll('.r-ex-step')].map((inp) => inp.value.trim());
+      r.exhibit = {title: exTitle, steps};
+    }
+  });
+}
+
+function paintCreator() {
+  const s = studio;
+  const roundsHtml = s.rounds.map((r, i) => {
+    const isFlaw = r.kind === 'flaw';
+    const isRetest = r.kind === 'retest' && !r.prompt;
+    const ex = r.exhibit || {title: '', steps: ['Step 1', 'Step 2', 'Step 3']};
+    const flawStep = r.flaw_step || 2;
+    const auditNote = auditReport?.round_notes?.find((n) => n.round === i + 1);
+    return `
+    <div class="studio-round panel" data-round-idx="${i}">
+      <div class="studio-round-head">
+        <div class="studio-round-title">
+          <span class="n">ROUND 0${i + 1}</span>
+          <select class="r-kind" data-idx="${i}">
+            ${KIND_OPTIONS.map(([k, lab]) => `<option value="${k}" ${r.kind === k ? 'selected' : ''}>${esc(lab)}</option>`).join('')}
+          </select>
+          <input class="r-label" type="text" maxlength="80" value="${esc(r.label || '')}" placeholder="Round label (e.g. Explain it simply)">
+        </div>
+        <div class="studio-round-moves">
+          ${i > 0 ? `<button type="button" class="btn small ghost" data-move-up="${i}" title="Move round up">↑</button>` : ''}
+          ${i < s.rounds.length - 1 ? `<button type="button" class="btn small ghost" data-move-down="${i}" title="Move round down">↓</button>` : ''}
+          ${s.rounds.length > 2 ? `<button type="button" class="btn small ghost" data-remove-round="${i}" title="Delete round">✕</button>` : ''}
+        </div>
+      </div>
+      ${auditNote ? `<div class="audit-pill ${auditNote.status === 'warn' ? 'warn' : 'ok'}"><b>${auditNote.status === 'warn' ? '⚠ Needs polish:' : '✓ Sharp:'}</b> ${esc(auditNote.note)}</div>` : ''}
+      ${isRetest ? `<p class="muted" style="margin:8px 0 10px;font-size:13.5px">By default, the Rematch round is generated live after Round ${i} to target the specific concept where the challenger scored lowest. You can also write a fixed final question below if you prefer.</p>` : ''}
+      <div class="studio-grid-2">
+        <div>
+          <label class="eyebrow">Question prompt ${isRetest ? '(leave blank for adaptive rematch)' : ''}</label>
+          <textarea class="r-prompt" rows="4" placeholder="${isRetest ? 'Leave blank so the examiner targets the challenger’s weakest round automatically, or write a fixed final question…' : 'Write a concrete, unambiguous question that forces causal reasoning…'}">${esc(r.prompt || '')}</textarea>
+        </div>
+        <div>
+          <label class="eyebrow">Grading &amp; Socratic teaching rubric</label>
+          <textarea class="r-rubric" rows="4" placeholder="What specific mechanism, numbers, or edge case must a 9–10/10 answer explain?">${esc(r.rubric || '')}</textarea>
+        </div>
+      </div>
+      ${isFlaw ? `
+      <div class="studio-exhibit">
+        <div class="studio-exhibit-head">
+          <label class="eyebrow">Step-by-step exhibit (click a step number to mark it as the planted flaw)</label>
+          <input class="r-ex-title" type="text" maxlength="160" value="${esc(ex.title || '')}" placeholder="Exhibit title (e.g. Proposed derivation of the chain rule)">
+        </div>
+        <ol class="studio-steps">
+          ${(ex.steps || ['', '', '']).map((st, sIdx) => {
+            const stepNum = sIdx + 1;
+            const isFlawed = flawStep === stepNum;
+            return `<li class="${isFlawed ? 'flawed' : ''}">
+              <button type="button" class="flaw-pick" data-pick-flaw="${i}:${stepNum}" title="Click to mark step ${stepNum} as the flawed step">${stepNum}${isFlawed ? ' · FLAW' : ''}</button>
+              <input class="r-ex-step" type="text" value="${esc(st)}" placeholder="Step ${stepNum} reasoning…">
+              ${(ex.steps || []).length > 3 ? `<button type="button" class="btn small ghost" data-del-step="${i}:${sIdx}">−</button>` : ''}
+            </li>`;
+          }).join('')}
+        </ol>
+        ${(ex.steps || []).length < 7 ? `<button type="button" class="btn small ghost" data-add-step="${i}">+ Add exhibit step</button>` : ''}
+      </div>` : ''}
+      <div class="studio-regen-bar">
+        <input type="text" class="r-instruction" data-regen-input="${i}" placeholder="Tell AI how to rewrite or sharpen this round (e.g. 'Use a 2-layer network with concrete numbers' or 'Focus on vanishing gradients')…">
+        <button type="button" class="btn small" data-regen-round="${i}">Rewrite round with AI ↻</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  view.innerHTML = `
+  <div class="record-head studio-top">
+    <div>
+      <p class="eyebrow">Fight Creator Studio ${s.parent_id ? `· <span class="seal-text">Forked from ${esc(s.parent_id)}</span>` : ''}</p>
+      <h1>${s.id ? 'Edit Fight Blueprint' : (s.parent_id ? 'Fork &amp; Improve Fight' : 'Design a Fight')}</h1>
+      <p>LLMs have knowledge; humans have taste. Steer the teaching angle, generate a full multi-round blueprint, and edit any question or rubric before challengers step in.</p>
+    </div>
+    <div class="studio-top-actions">
+      <button type="button" class="btn" id="st-audit">Check quality (AI Audit)</button>
+      <button type="button" class="btn" id="st-save-link">Save &amp; copy link</button>
+      <button type="button" class="btn primary" id="st-save-fight">Save &amp; Enter the Ring →</button>
+    </div>
+  </div>
+
+  ${auditReport ? `<div class="panel audit-banner ${auditReport.overall === 'sharp' ? 'ok' : 'warn'}">
+    <b>AI Quality Audit (${auditReport.overall === 'sharp' ? 'Sharp & Ready' : 'Suggestions Found'}):</b> ${esc(auditReport.summary)}
+  </div>` : ''}
+
+  <div class="panel studio-meta-panel">
+    <div class="studio-grid-3">
+      <div>
+        <label class="eyebrow" for="st-title">Topic / Fight Title</label>
+        <input id="st-title" type="text" maxlength="100" value="${esc(s.title)}" placeholder="e.g. Backpropagation &amp; the Chain Rule">
+      </div>
+      <div>
+        <label class="eyebrow" for="st-level">Difficulty Level (Fractal Depth)</label>
+        <select id="st-level">
+          ${LEVEL_OPTIONS.map((lv) => `<option value="${esc(lv)}" ${s.level === lv ? 'selected' : ''}>${esc(lv)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="eyebrow" for="st-category">Category &amp; Source</label>
+        <div class="studio-cat-row">
+          <select id="st-category">
+            ${CAT_OPTIONS.map((c) => `<option value="${esc(c)}" ${s.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+          </select>
+          <input id="st-source" type="text" maxlength="80" value="${esc(s.source)}" placeholder="Source (e.g. CS231n / Deep Learning)">
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <label class="eyebrow" for="st-taste">Your Creator Taste &amp; Teaching Direction (What should this fight emphasize?)</label>
+      <textarea id="st-taste" rows="3" placeholder="Tell the AI what misconceptions challengers always have here, what concrete example or intuition to anchor on, or what custom rounds you want (e.g. 'Force them to trace gradients through a concrete computational graph; don't let them hide behind matrix notation')…">${esc(s.taste_prompt)}</textarea>
+    </div>
+    <div class="studio-grid-2" style="margin-top:14px">
+      <div>
+        <label class="eyebrow" for="st-blurb">One-Line Hook (Shown on card)</label>
+        <input id="st-blurb" type="text" maxlength="200" value="${esc(s.blurb)}" placeholder="Why gradients vanish, what the chain rule actually routes, and where implementations break.">
+      </div>
+      <div>
+        <label class="eyebrow" for="st-brief">Examiner’s Brief (Core mechanisms &amp; common mistakes)</label>
+        <input id="st-brief" type="text" maxlength="3000" value="${esc(s.brief)}" placeholder="Auto-generated when you draft, or write your own key mechanisms…">
+      </div>
+    </div>
+    <details class="notes-toggle" style="margin-top:14px" ${s.notes ? 'open' : ''}>
+      <summary>Reference notes, syllabus or paper excerpt (optional)</summary>
+      <textarea id="st-notes" maxlength="24000" placeholder="Paste lecture notes, code, or a paper excerpt to ground the blueprint…">${esc(s.notes)}</textarea>
+    </details>
+    <div class="studio-draft-bar">
+      <span class="muted">Generate all rounds at once from your topic, level, and taste prompt — then edit any round below.</span>
+      <button type="button" class="btn primary" id="st-draft-all">Generate Full Blueprint with AI ✨</button>
+    </div>
+  </div>
+
+  <div class="section-head" style="margin-top:36px">
+    <div><p class="eyebrow">Round-by-Round Blueprint</p><h2>Customize the Rounds (${s.rounds.length})</h2></div>
+    <button type="button" class="btn small" id="st-add-round">+ Add a round</button>
+  </div>
+  <div id="studio-rounds">${roundsHtml}</div>
+  <div class="studio-bottom-bar">
+    <button type="button" class="btn" id="st-add-round-bottom">+ Add another round</button>
+    <div class="studio-top-actions">
+      <button type="button" class="btn" id="st-save-link-2">Save &amp; copy share link</button>
+      <button type="button" class="btn primary" id="st-save-fight-2">Save &amp; Enter the Ring →</button>
+    </div>
+  </div>`;
+
+  wireCreator();
+}
+
+function wireCreator() {
+  view.querySelectorAll('.r-kind').forEach((sel) => sel.addEventListener('change', () => {
+    syncStudioFromDom();
+    const idx = Number(sel.dataset.idx);
+    const kind = sel.value;
+    studio.rounds[idx].kind = kind;
+    const defaultLabel = KIND_OPTIONS.find(([k]) => k === kind)?.[1]?.split(' (')[0];
+    if (defaultLabel) studio.rounds[idx].label = defaultLabel;
+    if (kind === 'flaw' && !studio.rounds[idx].exhibit) {
+      studio.rounds[idx].exhibit = {title: 'Proposed argument', steps: ['Step 1', 'Step 2', 'Step 3']};
+      studio.rounds[idx].flaw_step = 2;
+    }
+    paintCreator();
+  }));
+
+  view.querySelectorAll('[data-pick-flaw]').forEach((btn) => btn.addEventListener('click', () => {
+    syncStudioFromDom();
+    const [rIdx, stepNum] = btn.dataset.pickFlaw.split(':').map(Number);
+    studio.rounds[rIdx].flaw_step = stepNum;
+    paintCreator();
+  }));
+
+  view.querySelectorAll('[data-add-step]').forEach((btn) => btn.addEventListener('click', () => {
+    syncStudioFromDom();
+    const rIdx = Number(btn.dataset.addStep);
+    const ex = studio.rounds[rIdx].exhibit || {title: '', steps: []};
+    ex.steps.push('');
+    studio.rounds[rIdx].exhibit = ex;
+    paintCreator();
+  }));
+
+  view.querySelectorAll('[data-del-step]').forEach((btn) => btn.addEventListener('click', () => {
+    syncStudioFromDom();
+    const [rIdx, sIdx] = btn.dataset.delStep.split(':').map(Number);
+    const ex = studio.rounds[rIdx].exhibit;
+    if (ex && ex.steps.length > 3) {
+      ex.steps.splice(sIdx, 1);
+      studio.rounds[rIdx].flaw_step = Math.min(studio.rounds[rIdx].flaw_step || 1, ex.steps.length);
+      paintCreator();
+    }
+  }));
+
+  view.querySelectorAll('[data-move-up]').forEach((btn) => btn.addEventListener('click', () => {
+    syncStudioFromDom();
+    const i = Number(btn.dataset.moveUp);
+    [studio.rounds[i - 1], studio.rounds[i]] = [studio.rounds[i], studio.rounds[i - 1]];
+    paintCreator();
+  }));
+
+  view.querySelectorAll('[data-move-down]').forEach((btn) => btn.addEventListener('click', () => {
+    syncStudioFromDom();
+    const i = Number(btn.dataset.moveDown);
+    [studio.rounds[i + 1], studio.rounds[i]] = [studio.rounds[i], studio.rounds[i + 1]];
+    paintCreator();
+  }));
+
+  view.querySelectorAll('[data-remove-round]').forEach((btn) => btn.addEventListener('click', () => {
+    syncStudioFromDom();
+    const i = Number(btn.dataset.removeRound);
+    studio.rounds.splice(i, 1);
+    paintCreator();
+  }));
+
+  const addRound = () => {
+    syncStudioFromDom();
+    const insertAt = studio.rounds.length && studio.rounds[studio.rounds.length - 1].kind === 'retest'
+      ? studio.rounds.length - 1
+      : studio.rounds.length;
+    studio.rounds.splice(insertAt, 0, {kind: 'custom', label: 'Custom angle', prompt: '', rubric: ''});
+    paintCreator();
+  };
+  document.getElementById('st-add-round')?.addEventListener('click', addRound);
+  document.getElementById('st-add-round-bottom')?.addEventListener('click', addRound);
+
+  // Draft full blueprint with AI
+  document.getElementById('st-draft-all')?.addEventListener('click', async (e) => {
+    syncStudioFromDom();
+    if (studio.title.length < 2 && studio.notes.trim().length < 20) {
+      toast('Enter a topic/title or paste reference notes first.');
+      document.getElementById('st-title')?.focus();
+      return;
+    }
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Drafting all rounds with AI (approx 6–10s)…';
+    try {
+      const drafted = await api('/api/blueprints/draft', {
+        topic: studio.title,
+        level: studio.level,
+        taste_prompt: studio.taste_prompt,
+        notes: studio.notes,
+      });
+      studio = {...studio, ...drafted, id: studio.id, parent_id: studio.parent_id};
+      auditReport = null;
+      toast('Blueprint drafted! Inspect or tweak any round below.');
+      paintCreator();
+    } catch (err) {
+      toast(err.message);
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+
+  // Per-round rewrite with AI
+  view.querySelectorAll('[data-regen-round]').forEach((btn) => btn.addEventListener('click', async () => {
+    syncStudioFromDom();
+    const i = Number(btn.dataset.regenRound);
+    const r = studio.rounds[i];
+    const instr = view.querySelector(`[data-regen-input="${i}"]`)?.value.trim() || '';
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Rewriting…';
+    try {
+      const updated = await api('/api/blueprints/regenerate-round', {
+        title: studio.title || 'Untitled topic',
+        source: studio.source,
+        level: studio.level,
+        brief: studio.brief,
+        taste_prompt: studio.taste_prompt,
+        kind: r.kind,
+        label: r.label,
+        current_prompt: r.prompt,
+        instruction: instr,
+      });
+      studio.rounds[i] = {...r, ...updated};
+      toast(`Round ${i + 1} updated.`);
+      paintCreator();
+    } catch (err) {
+      toast(err.message);
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }));
+
+  // AI Quality Audit
+  document.getElementById('st-audit')?.addEventListener('click', async (e) => {
+    syncStudioFromDom();
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Auditing questions & rubrics…';
+    try {
+      auditReport = await api('/api/blueprints/audit', studio);
+      paintCreator();
+    } catch (err) {
+      toast(err.message);
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+
+  async function saveStudioBlueprint(andFight) {
+    syncStudioFromDom();
+    if (!studio.title) {
+      toast('Give your fight a title first.');
+      document.getElementById('st-title')?.focus();
+      return;
+    }
+    const nonEmpty = studio.rounds.filter((r) => r.prompt.trim() || r.kind === 'retest');
+    if (nonEmpty.length < 2 || !nonEmpty[0].prompt.trim()) {
+      toast('Write a prompt for Round 1 (or click “Generate Full Blueprint with AI ✨” first).');
+      return;
+    }
+    try {
+      const method = studio.id ? 'PUT' : 'POST';
+      const path = studio.id ? `/api/blueprints/${encodeURIComponent(studio.id)}` : '/api/blueprints';
+      const response = await fetch(path, {
+        method,
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({...studio, rounds: nonEmpty, published: true}),
+      });
+      const saved = await response.json();
+      if (!response.ok) throw new Error(saved.detail || 'Could not save blueprint.');
+      studio = saved;
+      // Refresh cached blueprints list
+      modules = null;
+      const shareUrl = `${location.origin}${location.pathname}#/f/${saved.id}`;
+      if (andFight) {
+        beginBlueprint({
+          id: saved.id,
+          blueprint: true,
+          title: saved.title,
+          source: saved.source,
+          level: saved.level,
+          total_rounds: saved.rounds.length,
+          opener: saved.rounds[0].prompt,
+        });
+      } else {
+        try { await navigator.clipboard.writeText(shareUrl); toast(`Saved! Share link copied: ${shareUrl}`); }
+        catch { toast(`Saved! Share link: #/f/${saved.id}`); }
+        paintCreator();
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  document.getElementById('st-save-fight')?.addEventListener('click', () => saveStudioBlueprint(true));
+  document.getElementById('st-save-fight-2')?.addEventListener('click', () => saveStudioBlueprint(true));
+  document.getElementById('st-save-link')?.addEventListener('click', () => saveStudioBlueprint(false));
+  document.getElementById('st-save-link-2')?.addEventListener('click', () => saveStudioBlueprint(false));
+}
+
+async function renderBlueprintShare(bpId) {
+  setNav('');
+  view.innerHTML = '<p class="loading">Loading fight…</p>';
+  try {
+    const bp = await api(`/api/blueprints/${encodeURIComponent(bpId)}`);
+    beginBlueprint({
+      id: bp.id,
+      blueprint: true,
+      title: bp.title,
+      source: bp.source,
+      level: bp.level,
+      total_rounds: bp.rounds.length,
+      opener: bp.rounds[0]?.prompt || '',
+    });
+  } catch (e) {
+    view.innerHTML = `<div class="gate"><h2>Fight not found</h2><p>${esc(e.message)}</p><a class="btn primary" href="#/">Back to modules</a></div>`;
+  }
+}
+
 // --- Router ---
 
 function route() {
   clearInterval(tick);
   const hash = location.hash || '#/';
   const match = hash.match(/^#\/s\/([\w-]+)/);
+  const fMatch = hash.match(/^#\/f\/([\w-]+)/);
   if (match && match[1] === 'new') {
     // The provisional address of a session still being created.
     if (session && session.id === null) paintSession();
     else location.replace('#/');
   } else if (match) renderSession(match[1]);
+  else if (fMatch) renderBlueprintShare(fMatch[1]);
+  else if (hash.startsWith('#/create')) {
+    const params = new URLSearchParams(hash.split('?')[1] || '');
+    renderCreator(params.get('fork'), params.get('edit'));
+  }
+  else if (hash.startsWith('#/atlas')) renderAtlasPage();
   else if (hash.startsWith('#/me')) renderMe();
   else if (hash.match(/^#\/subject\/([\w-]+)/)) renderSubject(hash.match(/^#\/subject\/([\w-]+)/)[1]);
   else { session = null; renderHome(); }

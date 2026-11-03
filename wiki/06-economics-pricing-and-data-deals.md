@@ -2,20 +2,20 @@
 
 ## 1. Unit Economics & Compute Costs per Fight
 
-Looking at Bob's implementation in [`app.py`](../app.py) and [`providers.py`](../providers.py):
+Looking at Bob's implementation in [`app.py`](https://github.com/TheBuilderJR/kenjitsu/blob/main/app.py) and [`providers.py`](https://github.com/TheBuilderJR/kenjitsu/blob/main/providers.py):
 
 ### How many tokens does one 5-round Fight use?
 - A full 5-round fight makes **4 to 5 question-generation calls** and **5 to 7 grading/hint calls**.
 - Each call sends roughly `1,500–2,500` input tokens and generates `250–450` output tokens (with `effort='low'` enabled on routine calls so the model doesn't burn thousands of hidden reasoning tokens).
 - **Total tokens per 5-round Fight (when generated from scratch):** ~`18,000` input tokens and ~`3,000` output tokens.
 - **Cost per Fight:**
-  - **Generated from scratch (User #1):** **\$0.02 to \$0.06** using fast frontier models (Claude Sonnet, GPT-5 mini, or Gemini Flash).
-  - **Reused from the shelf (User #2 through User #10,000):** Because Rounds 1–4 are already written and cached for off-the-shelf fights, we pay **\$0** to generate Rounds 1–4 and only pay to grade the user's 5 answers and generate Round 5 (the custom rematch). That cuts our compute cost to **\$0.01 to \$0.03 per fight**.
+  - **Generated from scratch (User #1):** **$0.02 to $0.06** using fast frontier models (Claude Sonnet, GPT-5 mini, or Gemini Flash).
+  - **Reused from the shelf (User #2 through User #10,000):** Because Rounds 1–4 are already written and cached for off-the-shelf fights, we pay **$0** to generate Rounds 1–4 and only pay to grade the user's 5 answers and generate Round 5 (the custom rematch). That cuts our compute cost to **$0.01 to $0.03 per fight**.
 
 ### Why our margins are much healthier than coding agents or chat wrappers
-- In coding tools (like Cursor or Claude Code), a single prompt triggers an autonomous loop that reads 20 files and burns \$0.50–\$2.00 in 30 seconds while the user sits back and watches.
+- In coding tools (like Cursor or Claude Code), a single prompt triggers an autonomous loop that reads 20 files and burns $0.50–$2.00 in 30 seconds while the user sits back and watches.
 - In our app, **the human's brain is the bottleneck**: a single 5-round fight takes a human **5 to 10 minutes of active thinking and typing**, and costs us **1 to 3 cents**.
-- Even a heavy user who plays **3 full fights every single day** (90 fights/month, ~12 hours of intense mental effort) only costs us **~\$1.80 to \$2.70/month** in API fees. On a **\$20/month** subscription, that is an **85%+ gross margin**.
+- Even a heavy user who plays **3 full fights every single day** (90 fights/month, ~12 hours of intense mental effort) only costs us **~$1.80 to $2.70/month** in API fees. On a **$20/month** subscription, that is an **85%+ gross margin**.
 
 ---
 
@@ -26,10 +26,10 @@ Because we serve both **lifelong learners** (who explore the knowledge tree year
 1. **Free Tier (The Acquisition Hook):**
    - **2–3 free fights per day** on public off-the-shelf modules.
    - Lets any visitor click a shared link, light up a node on the tree, see their private percentile ranking, and get hooked—while costing us less than 5 cents per active free day.
-2. **Pro Membership (\$15–\$20/month or \$120/year) — For Lifelong Learners & Regular Students:**
+2. **Pro Membership ($15–$20/month or $120/year) — For Lifelong Learners & Regular Students:**
    - Unlimited fights across the whole knowledge tree, unlimited Socratic breakdowns when stuck, Anki-style spaced repetition scheduling, and custom fight generation from private notes/PDFs.
-3. **One-Time "Cram Pass" (\$29–\$39 for 14 or 30 days, no auto-renew) — For Interviewees & Exam Takers:**
-   - Candidates prepping for a Meta/Google interview or students facing finals often hate recurring subscriptions, but will happily pay \$35 once for 2–4 weeks of unlimited access before their big day (similar to UWorld and 7Sage passes).
+3. **One-Time "Cram Pass" ($29–$39 for 14 or 30 days, no auto-renew) — For Interviewees & Exam Takers:**
+   - Candidates prepping for a Meta/Google interview or students facing finals often hate recurring subscriptions, but will happily pay $35 once for 2–4 weeks of unlimited access before their big day (similar to UWorld and 7Sage passes).
 4. **Creator Marketplace (Later):**
    - Top domain experts and tutors can sell specialized packs of fights or earn a share of subscription revenue based on how many paying users run their fights.
 
@@ -55,8 +55,8 @@ Labs don't want raw LLM outputs—they want **the human taste, human corrections
   `Initial Human Misconception → Socratic Question Sequence → Verified Human Transfer on Follow-Up Test`.
 - That provides a ground-truth reward signal for training models on human pedagogy and collaborative reasoning.
 
-### 2. Expert Edits & Empirical Filtering of Reasoning Problems (What Labs Pay Mercor \$150/hr For)
-- Labs pay contractors at Mercor, Scale, and Surge \$100–\$200/hr to write hard domain questions, "find the flaw" exhibits, and grading rubrics.
+### 2. Expert Edits & Empirical Filtering of Reasoning Problems (What Labs Pay Mercor $150/hr For)
+- Labs pay contractors at Mercor, Scale, and Surge $100–$200/hr to write hard domain questions, "find the flaw" exhibits, and grading rubrics.
 - On our platform:
   - **Expert diffs:** When a domain expert edits or forks an AI-generated round because the AI's question was trivial or its rubric missed the real mechanism, we capture `(What the frontier model drafted) → (How a domain expert fixed it)`.
   - **Empirical validation across hundreds of runs:** When 500 humans play Round 3 (*Find the flaw*), if 90% of top-scoring users disagree with the model's answer key, our platform catches where the model had a hallucinated flaw or broken assumption.

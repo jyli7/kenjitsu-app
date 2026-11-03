@@ -23,7 +23,7 @@ When a user types a general topic (e.g., `"The Great Leap Forward"`, `"Collider 
 2. **If it doesn't exist yet, an ad-hoc fight becomes the v1 off-the-shelf fight:** If nobody has ever asked for `"Collider bias"` before, our system generates the Focus Map and Rounds 1–4 on the fly—**and saves them to the shared database as the v1 fight on the shelf.**
 3. **Why reusing Rounds 1–4 across users is a 4x win:**
    - **Zero wait time:** User #2 through User #10,000 get Rounds 1–4 in `0ms`.
-   - **Half the compute cost:** We pay \$0 to generate Rounds 1–4 for every subsequent user, and only pay to grade their answers and generate Round 5 (their custom rematch).
+   - **Half the compute cost:** We pay $0 to generate Rounds 1–4 for every subsequent user, and only pay to grade their answers and generate Round 5 (their custom rematch).
    - **Fair percentile rankings:** Everyone who plays that fight answers the exact same Rounds 1–4, making the percentile curve accurate from User #2 onward.
    - **Continuous quality improvement:** When hundreds of people play the same saved fight, we can see if Round 3 is confusing and fix or replace just Round 3.
 

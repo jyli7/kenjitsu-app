@@ -83,6 +83,33 @@ class KenjitsuTests(unittest.IsolatedAsyncioTestCase):
                 reply = {'brief': 'Terms and votes.'}
             elif 'PLAN A PROGRESSION' in prompt:
                 reply = PLAN
+            elif 'BREAKDOWN / STEPPING-STONE REQUEST' in prompt:
+                reply = {'intuition': 'Out of 100,000 people, only 100 have the disease, while 99,900 are healthy.',
+                         'stepping_stone': 'Out of those 99,900 healthy people, how many get a 1% false positive?',
+                         'concept': 'Base rate vs false positives'}
+            elif 'STEPPING-STONE COACHING IN PROGRESS' in prompt:
+                reply = {'feedback': 'Right: about 999 healthy people test positive.',
+                         'ready_for_main': True, 'next_question': None}
+            elif 'DESIGN A COMPLETE FIGHT BLUEPRINT' in prompt:
+                reply = {
+                    'title': 'Backpropagation & Chain Rule',
+                    'category': 'AI & ML',
+                    'source': 'Deep Learning',
+                    'blurb': 'How local gradients route backward through a computational graph.',
+                    'brief': 'Chain rule, upstream vs local gradients, vanishing gradients.',
+                    'rounds': [
+                        {'kind': 'explain', 'label': 'Explain it simply', 'prompt': 'Explain backprop.', 'rubric': 'Chain rule.'},
+                        {'kind': 'perturb', 'label': 'What if it changes?', 'prompt': 'Zero weights?', 'rubric': 'Symmetry.'},
+                        {'kind': 'flaw', 'label': 'Find the flaw', **FLAW},
+                        {'kind': 'apply', 'label': 'New case', 'prompt': 'Apply to ResNet.', 'rubric': 'Skip connection.'},
+                        {'kind': 'retest', 'label': 'Rematch', 'prompt': '', 'rubric': 'Adaptive rematch.'},
+                    ],
+                }
+            elif 'REWRITE ONE FIGHT ROUND' in prompt:
+                reply = {'label': 'Vanishing gradients', 'prompt': 'Why do deep sigmoids vanish?', 'rubric': 'Max derivative 0.25.'}
+            elif 'QUALITY & TASTE AUDIT' in prompt:
+                reply = {'overall': 'sharp', 'summary': 'Clear causal questions.',
+                         'round_notes': [{'round': 1, 'status': 'ok', 'note': 'Tests core mechanism.'}]}
             elif match := re.search(r'TASK\nWrite round \d \((.+?)\)', prompt):
                 kind = next(k for k, lab, _ in mod.ROUNDS if lab == match[1])
                 reply = 'nope' if self.question_failures else question(kind)
@@ -564,6 +591,86 @@ for event in [{{'type': 'thread.started'}},
         self.assertEqual(health['modules'], len(json.loads(
             Path(__file__).with_name('modules.json').read_text())))
         self.assertIn('Kenjitsu', (await self.web.get('/')).text)
+
+    async def test_challenger_socratic_breakdown(self):
+        s = (await self.web.post('/api/sessions', json={'module': 'bayes'})).json()
+        sid = s['id']
+        await self.settle()
+        # Challenger asks to break the round down
+        b1 = (await self.web.post(f'/api/sessions/{sid}/breakdown', json={'answer': ''})).json()
+        r0 = b1['rounds'][0]
+        self.assertTrue(r0['assisted'])
+        self.assertEqual(r0['coaching']['concept'], 'Base rate vs false positives')
+        self.assertFalse(r0['coaching']['ready_for_main'])
+        self.assertEqual(len(r0['coaching']['steps']), 1)
+
+        # Challenger answers the stepping-stone question
+        b2 = (await self.web.post(f'/api/sessions/{sid}/breakdown',
+                                  json={'answer': 'Around 999 people'})).json()
+        r0 = b2['rounds'][0]
+        self.assertTrue(r0['coaching']['ready_for_main'])
+        self.assertIn('999', r0['coaching']['steps'][0]['feedback'])
+
+        # Challenger now answers the main round question; even if raw grade is 9, assisted round caps at 7
+        self.grades = [grade(9)]
+        s = await self.answer(sid, text='99 true positives vs 999 false positives => ~9%')
+        self.assertEqual(s['rounds'][0]['score'], 7)
+
+    async def test_blueprint_creator_fork_and_play(self):
+        # Fork a built-in module
+        forked = (await self.web.get('/api/blueprints/fork/bayes')).json()
+        self.assertEqual(forked['parent_id'], 'bayes')
+        self.assertEqual(forked['rounds'][0]['prompt'], mod.MODULES['bayes']['opener'])
+
+        # Draft a complete blueprint with Creator taste prompt
+        drafted = (await self.web.post('/api/blueprints/draft', json={
+            'topic': 'Backpropagation',
+            'level': 'Practitioner / Interview',
+            'taste_prompt': 'Force challengers to trace gradients through a computational graph.',
+            'notes': 'Chain rule notes',
+        })).json()
+        self.assertEqual(drafted['title'], 'Backpropagation & Chain Rule')
+        self.assertEqual(len(drafted['rounds']), 5)
+
+        # Regenerate Round 2 with a specific instruction
+        regen = (await self.web.post('/api/blueprints/regenerate-round', json={
+            'title': drafted['title'],
+            'kind': 'perturb',
+            'label': 'What if it changes?',
+            'instruction': 'Focus on vanishing gradients in sigmoids',
+        })).json()
+        self.assertEqual(regen['label'], 'Vanishing gradients')
+        drafted['rounds'][1] = regen
+
+        # Run AI quality audit
+        audit = (await self.web.post('/api/blueprints/audit', json=drafted)).json()
+        self.assertEqual(audit['overall'], 'sharp')
+
+        # Save blueprint
+        saved = (await self.web.post('/api/blueprints', json=drafted)).json()
+        bp_id = saved['id']
+        self.assertTrue(saved['is_owner'])
+
+        # Start a fight from the saved blueprint: Rounds 1-4 are pre-authored (0 LLM generation calls!)
+        prompts_before = len(self.prompts)
+        s = (await self.web.post('/api/sessions', json={'blueprint': bp_id})).json()
+        sid = s['id']
+        await self.settle()
+        self.assertEqual(s['rounds'][0]['turns'][0]['question'], 'Explain backprop.')
+        # No background round 2-4 generation calls were needed!
+        self.assertEqual([self.written(n) for n in (2, 3, 4)], [0, 0, 0])
+
+        # Play through round 1 and verify round 2 is immediately ready with the custom label
+        self.grades = [grade(9)]
+        s = await self.answer(sid, text='Chain rule multiplies local gradients.')
+        self.assertEqual(s['rounds'][1]['label'], 'Vanishing gradients')
+        self.assertTrue(s['rounds'][1]['ready'])
+
+        # Rate the fight
+        rated = (await self.web.post(f'/api/sessions/{sid}/rate', json={'vote': 1})).json()
+        self.assertEqual(rated['vote'], 1)
+        bp_after = (await self.web.get(f'/api/blueprints/{bp_id}')).json()
+        self.assertEqual(bp_after['upvotes'], 1)
 
 
 if __name__ == '__main__':

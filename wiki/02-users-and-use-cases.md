@@ -7,7 +7,7 @@ Anyone who wants to learn a topic and keep it in their head long-term can use ou
 ### 1. Job Interviewees (SWE, System Design, AI/ML, Quant, Finance, Consulting)
 - **Why they care:** Lots of money and career trajectory are on the line in a 2–4 week window.
 - **Why existing tools fail them:** Because anyone can memorize standard coding or system design templates with AI now, interviewers increasingly test candidates by changing constraints and probing edge cases. Reading a system design guide passively creates an illusion of competence that falls apart the moment an interviewer asks *"What breaks if one key gets 100x the traffic?"*
-- **Willingness to pay:** Very high out-of-pocket spend (\$30–\$100+ for short-term interview passes).
+- **Willingness to pay:** Very high out-of-pocket spend ($30–$100+ for short-term interview passes).
 
 ### 2. Standardized Test Takers (LSAT, MCAT, GMAT, Bar, AP Exams)
 - **Why they care:** High-stakes exams with an objective score and a ticking clock.
@@ -29,7 +29,7 @@ To make sure our platform works across **all** kinds of knowledge—not just com
 
 ### 1. Machine Learning & Systems
 - **Backpropagation & the Chain Rule:** Why working backward reuses intermediate sensitivities in one pass instead of running a separate forward pass for each of a million weights.
-- **Transformer Mechanics:** Why $Q, K, V$ are separate projections, why unmasked positionless self-attention is permutation-equivariant, why $\sqrt{d_k}$ prevents softmax gradients from vanishing, and why batch-1 decoding is bottlenecked by memory bandwidth rather than FLOPs.
+- **Transformer Mechanics:** Why Q, K, V are separate projections, why unmasked positionless self-attention is permutation-equivariant, why √dₖ prevents softmax gradients from vanishing, and why batch-1 decoding is bottlenecked by memory bandwidth rather than FLOPs.
 - **Post-Training LLMs (RLHF / PPO vs. DPO vs. GRPO):** What the KL penalty prevents, how DPO turns reward modeling + RL into a direct loss on preference pairs, and how GRPO replaces the value network with group sampling.
 - **Residual Streams & Pre-LN vs. Post-LN Transformers:** How Pre-LN keeps a clean identity path for gradients from the loss back to layer 1.
 
@@ -40,15 +40,15 @@ To make sure our platform works across **all** kinds of knowledge—not just com
 - **What History reveals about Fight design:** In history, asking for "a formula in plain words" feels unnatural. Great history fights test **incentives, constraints, counterfactuals, and putting yourself in the room** (*"Why did Actor A have no choice but to do X?"*).
 
 ### 3. Behavioral Economics
-- **Prospect Theory vs. Expected Utility (Kahneman & Tversky):** Reference dependence, loss aversion, and why people are risk-averse in gains (preferring a sure \$500 over a 50% shot at \$1,000) but risk-seeking in losses (preferring a 50% shot at losing \$1,000 over a sure \$500 loss).
+- **Prospect Theory vs. Expected Utility (Kahneman & Tversky):** Reference dependence, loss aversion, and why people are risk-averse in gains (preferring a sure $500 over a 50% shot at $1,000) but risk-seeking in losses (preferring a 50% shot at losing $1,000 over a sure $500 loss).
 - **Goodhart's Law & Perverse Incentives:** Why turning a diagnostic measure into a rewarded target causes agents to optimize the proxy and break the system (connecting the 1902 Hanoi rat bounty, 1958 grain quotas, and LLM reward hacking).
 
 ### 4. Molecular & Evolutionary Biology
-- **The *lac* Operon as a Logic Gate:** How *E. coli* combines a negative repressor (lifted by allolactose) and a positive activator (CAP-cAMP when glucose is low) to build an `AND NOT` gate, and predicting what breaks under specific mutations ($I^-$, $O^c$).
-- **Hamilton's Rule ($rB > C$) & Gene-Centered Evolution:** Why natural selection acts on allele copies rather than "the good of the species."
+- **The *lac* Operon as a Logic Gate:** How *E. coli* combines a negative repressor (lifted by allolactose) and a positive activator (CAP-cAMP when glucose is low) to build an `AND NOT` gate, and predicting what breaks under specific mutations (I⁻, Oᶜ).
+- **Hamilton's Rule (rB > C) & Gene-Centered Evolution:** Why natural selection acts on allele copies rather than "the good of the species."
 
 ### 5. Statistics & Causal Inference
-- **$p$-Values, Base Rates & Multiple Testing:** Why $p = 0.03$ does *not* mean a 3% chance the null hypothesis is true, and how testing 20 hypotheses or peeking at data inflates false positives.
+- **p-Values, Base Rates & Multiple Testing:** Why p = 0.03 does *not* mean a 3% chance the null hypothesis is true, and how testing 20 hypotheses or peeking at data inflates false positives.
 - **Collider Bias (Berkson's Paradox) vs. Confounding:** Why conditioning on a common *effect* of two independent causes creates a fake correlation between them (e.g., why talent and attractiveness appear negatively correlated among famous actors).
 - **Simpson's Paradox:** How a treatment can have a higher recovery rate in men and a higher recovery rate in women, yet a lower recovery rate overall.
 

@@ -24,7 +24,7 @@ Because this wiki lives inside the Git repository (`wiki/`), every idea, product
    - Off-the-shelf vs. ad-hoc fights (generate once, reuse for everyone).
    - Freedom in creating fights (no forced boxes), forking/editing, automated LLM quality checks, and pruning the shelf via human ratings.
 6. **[06 — Unit Economics, Pricing & Frontier Lab Data Deals](./06-economics-pricing-and-data-deals.md)**
-   - Exact token math per fight (\$0.01–\$0.03 per reused fight), Free vs. Membership vs. Cram Pass, usage limits, and Bob's Mercor/Reddit angle for licensing post-training data and expert networks to frontier labs.
+   - Exact token math per fight ($0.01–$0.03 per reused fight), Free vs. Membership vs. Cram Pass, usage limits, and Bob's Mercor/Reddit angle for licensing post-training data and expert networks to frontier labs.
 7. **[07 — Copyright & Legal Notes](./07-copyright-and-legal.md)**
    - Why questioning users on books like *Say Nothing*, *Empire of Pain*, or *Thinking, Fast and Slow* does not infringe copyright (`17 U.S.C. § 102(b)` and Fair Use).
 8. **[08 — Open Questions & Decision Log](./08-open-questions-and-changelog.md)**

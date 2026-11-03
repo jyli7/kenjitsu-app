@@ -41,7 +41,7 @@
   - Reframed the mission from *"Learn elsewhere first, come here to be tested"* to **"We are the best place to go to learn and remember—and the best way to learn something is to get asked questions."** Added the in-round **Primer / Socratic Stepping-Stones** design.
 - **2026-11-02 — Platform Thesis ("LLMs Have Knowledge; Humans Have Taste"):**
   - Decided to build a **platform and crowd ecosystem**, not an in-house content studio. AI makes creating raw lessons cheap; humans supply the taste (by creating, editing, and forking fights without forced boxes, and by filtering fights through completion rates and ratings).
-  - Established that public topics are generated once, saved to the shelf, and reused across users (cutting compute cost to \$0.01–\$0.03/fight, making loading instant, and enabling fair percentiles).
+  - Established that public topics are generated once, saved to the shelf, and reused across users (cutting compute cost to $0.01–$0.03/fight, making loading instant, and enabling fair percentiles).
 - **2026-11-02 — Unit Economics & Frontier Lab Data Angle (Mercor/Reddit):**
-  - Calculated unit costs (\$0.01–\$0.03 per reused fight; ~85% gross margin on a \$20/mo membership because human thinking time is the bottleneck).
+  - Calculated unit costs ($0.01–$0.03 per reused fight; ~85% gross margin on a $20/mo membership because human thinking time is the bottleneck).
   - Documented Bob's Mercor/Reddit data insight: our platform naturally generates closed-loop Socratic teaching traces, human expert diffs on domain rubrics/flaws, graded human answers across the skill curve for reward models, and a vetted network of 99th-percentile domain experts.

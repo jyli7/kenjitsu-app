@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import httpx
-
-OnText = Callable[[str], Awaitable[None]] | None
+    OnText = Callable[[str], Awaitable[None]] | None
+else:
+    OnText = object
 # Used when KENJITSU_PROVIDERS is unset or "auto": every configured provider, in this order.
 AUTO_ORDER = ('openrouter', 'anthropic', 'openai', 'claude-cli', 'codex-cli')
 CLI_TIMEOUT = float(os.getenv('KENJITSU_CLI_TIMEOUT', '240'))

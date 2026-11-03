@@ -140,13 +140,146 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS subjects_uid ON subjects(uid, updated_at);
             CREATE UNIQUE INDEX IF NOT EXISTS subjects_module ON subjects(uid, module)
                 WHERE module != '';
+            CREATE TABLE IF NOT EXISTS blueprints (
+                id TEXT PRIMARY KEY, uid TEXT NOT NULL, parent_id TEXT,
+                title TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'Community',
+                source TEXT NOT NULL DEFAULT '', level TEXT NOT NULL DEFAULT 'Core',
+                blurb TEXT NOT NULL DEFAULT '', taste_prompt TEXT NOT NULL DEFAULT '',
+                brief TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+                rounds_json TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 1,
+                upvotes INTEGER NOT NULL DEFAULT 0, downvotes INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS blueprints_pub ON blueprints(published, updated_at);
+            CREATE TABLE IF NOT EXISTS fight_ratings (
+                uid TEXT NOT NULL, target_id TEXT NOT NULL, vote INTEGER NOT NULL,
+                comment TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+                PRIMARY KEY (uid, target_id));
         ''')
         columns = {r['name'] for r in conn.execute('PRAGMA table_info(sessions)')}
         for column in ('subject', 'focus'):
             if column not in columns:
                 conn.execute(f'ALTER TABLE sessions ADD COLUMN {column} TEXT')
         conn.execute('CREATE INDEX IF NOT EXISTS sessions_subject ON sessions(subject, focus)')
+        seed_default_blueprints(conn)
     backfill_subjects()
+
+
+def seed_default_blueprints(conn: sqlite3.Connection) -> None:
+    if conn.execute('SELECT 1 FROM blueprints WHERE id = ?', ('backprop',)).fetchone():
+        return
+    rounds = [
+        {
+            'kind': 'explain',
+            'label': 'Explain it simply',
+            'prompt': (
+                'Consider a two-layer network where input `x` goes into `h = f(w1 * x)`, '
+                'prediction `y_hat = g(w2 * h)`, and loss `L = (y_hat - y)^2`. Explain in plain '
+                'language what backpropagation is actually computing for `w1`, why we don’t need '
+                'to recompute everything from scratch for each weight, and what gets saved during '
+                'the forward pass to make the backward pass cheap.'
+            ),
+            'rubric': (
+                'Backpropagation applies the chain rule from the output back to earlier layers: '
+                'dL/dw1 = (dL/dy_hat) * (dy_hat/dh) * (dh/dw1). Instead of computing separate '
+                'paths for every parameter, each node receives its upstream gradient (dL/dh) once '
+                'and multiplies by its local derivative (dh/dw1 = f\'(w1*x) * x). The forward pass '
+                'caches intermediate activations (x, w1*x, h) because local derivatives depend on '
+                'the values at which those functions were evaluated.'
+            ),
+        },
+        {
+            'kind': 'perturb',
+            'label': 'What if it changes?',
+            'prompt': (
+                'Suppose you stack 30 layers that each use the standard logistic sigmoid '
+                '`σ(z) = 1 / (1 + e^-z)` and initialize weights with small random numbers around 0. '
+                'When you run backpropagation, what happens to the gradient `dL/dw1` in the very '
+                'first layer compared to the last layer, and why does the math of `σ\'(z)` cause '
+                'this even when no activations are saturated?'
+            ),
+            'rubric': (
+                'The derivative of sigmoid is σ(z)(1 - σ(z)), which reaches its maximum value of '
+                '0.25 at z = 0. Even in the best-case unsaturated region around 0, multiplying '
+                'local derivatives across 30 layers multiplies by at most (0.25)^30 (times small '
+                'weights), causing gradients in early layers to shrink exponentially toward zero '
+                '(vanishing gradients). Early layers barely update while final layers learn.'
+            ),
+        },
+        {
+            'kind': 'flaw',
+            'label': 'Find the flaw',
+            'prompt': (
+                'A colleague writes out the backward pass for a residual block `y = x + F(x, W)` '
+                'and concludes that skip connections can still vanish whenever `F(x, W)` has '
+                'near-zero gradients. Which step in their argument is flawed, and what is the '
+                'correct derivative?'
+            ),
+            'rubric': (
+                'Step 3 is flawed: the derivative of a sum is the sum of derivatives, not the '
+                'product. Because y = x + F(x, W), dy/dx = 1 + dF/dx, so dL/dx = dL/dy * (1 + dF/dx) '
+                '= dL/dy + dL/dy * dF/dx. Even if dF/dx is 0, the gradient dL/dy flows straight '
+                'through the +1 identity term unimpeded.'
+            ),
+            'exhibit': {
+                'title': 'Gradient flow through a residual block y = x + F(x, W)',
+                'steps': [
+                    'Let the output of the block be y = x + F(x, W), and suppose we already know the upstream gradient dL/dy.',
+                    'By the chain rule, the gradient with respect to the block input x is dL/dx = (dL/dy) * (dy/dx).',
+                    'Since y combines x and F(x, W), the local Jacobian dy/dx is the product of the two branches: (dx/dx) * (dF/dx) = 1 * (dF/dx).',
+                    'Therefore, if the weights inside F saturate or shrink so that dF/dx ≈ 0, then dL/dx ≈ 0 and the gradient vanishes across the block.',
+                ],
+            },
+            'flaw_step': 3,
+        },
+        {
+            'kind': 'apply',
+            'label': 'New case',
+            'prompt': (
+                'You are training a large transformer on a single GPU and run out of memory '
+                'because storing intermediate activations for all 48 layers overflows VRAM. '
+                'Someone suggests throwing away the intermediate activations during the forward '
+                'pass. Based on how backpropagation works, what breaks if you simply discard '
+                'them, and how does activation checkpointing trade compute for memory to fix it?'
+            ),
+            'rubric': (
+                'Without cached activations from the forward pass, you cannot evaluate the local '
+                'derivatives (such as softmax attentions, GELU derivatives, or linear layer inputs '
+                'x^T) during the backward pass. Activation checkpointing saves activations only at '
+                'every k-th layer boundary; during the backward pass, it recomputes the forward '
+                'activations for the segment between checkpoints on the fly, trading ~1 extra '
+                'forward pass of compute for a large drop in activation memory.'
+            ),
+        },
+        {
+            'kind': 'retest',
+            'label': 'Rematch',
+            'prompt': '',
+            'rubric': 'Adaptive rematch targeting the challenger’s weakest round.',
+        },
+    ]
+    ts = now()
+    conn.execute(
+        '''INSERT INTO blueprints
+           (id, uid, parent_id, title, category, source, level, blurb, taste_prompt,
+            brief, notes, rounds_json, published, upvotes, downvotes, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,1,0,?,?)''',
+        (
+            'backprop',
+            'system',
+            None,
+            'Backpropagation & the chain rule',
+            'AI & ML',
+            'Deep learning fundamentals',
+            'Practitioner / Interview',
+            'Why local gradients multiply, why forward activations are cached, and how skip connections beat vanishing gradients.',
+            'Force challengers to trace concrete scalar/vector equations rather than hand-waving about "error flowing backward."',
+            'Backpropagation computes dL/dW via reverse-mode automatic differentiation: each node multiplies its incoming upstream gradient by its local derivative evaluated at the cached forward activation.',
+            '',
+            json.dumps(rounds),
+            ts,
+            ts,
+        ),
+    )
 
 
 def backfill_subjects() -> None:
@@ -237,12 +370,15 @@ async def stop_background() -> None:
         await asyncio.gather(*background, return_exceptions=True)
 
 
+UTC = getattr(dt, 'UTC', dt.timezone.utc)
+
+
 def now() -> str:
-    return dt.datetime.now(dt.UTC).isoformat(timespec='seconds')
+    return dt.datetime.now(UTC).isoformat(timespec='seconds')
 
 
 def today() -> str:
-    return dt.datetime.now(dt.UTC).date().isoformat()
+    return dt.datetime.now(UTC).date().isoformat()
 
 
 def now_ms() -> int:
@@ -351,6 +487,8 @@ def clean_question(raw, kind: str) -> dict:
     if not isinstance(raw, dict) or not text(raw.get('prompt')):
         raise ValueError('missing question')
     question = {'prompt': text(raw['prompt'], 3000), 'rubric': text(raw.get('rubric'), 3000)}
+    if text(raw.get('label'), 80):
+        question['label'] = text(raw['label'], 80)
     if kind == 'flaw':
         exhibit = raw.get('exhibit') or {}
         steps = strings(exhibit.get('steps'), 7) if isinstance(exhibit, dict) else []
@@ -403,6 +541,10 @@ def dossier(state: dict) -> str:
     parts = [f"MATERIAL\nTitle: {state['title']}"]
     if state.get('source'):
         parts.append(f"Source: {state['source']}")
+    if state.get('level'):
+        parts.append(f"Target level: {state['level']}")
+    if state.get('taste_prompt'):
+        parts.append(f"Creator's teaching direction & taste:\n{state['taste_prompt']}")
     if state.get('brief'):
         parts.append(f"Examiner's brief:\n{state['brief']}")
     if state.get('notes'):
@@ -419,7 +561,8 @@ def dossier(state: dict) -> str:
     if done:
         parts.append('\nEARLIER ROUNDS')
         for i, r in enumerate(done, 1):
-            parts.append(f"Round {i} ({label(r['kind'])}) final score {r['score']}/10")
+            assisted_note = ' (assisted via stepping-stone breakdown — retest unassisted!)' if r.get('assisted') else ''
+            parts.append(f"Round {i} ({r.get('label') or label(r['kind'])}) final score {r['score']}/10{assisted_note}")
             for turn in r['turns']:
                 g = turn.get('grade') or {}
                 parts.append(f"  Q: {turn['question']}\n  A: {turn.get('answer') or ''}\n"
@@ -428,12 +571,15 @@ def dossier(state: dict) -> str:
     return '\n'.join(parts)
 
 
-def label(kind: str) -> str:
-    return next(lab for k, lab, _ in ROUNDS if k == kind)
+def label(kind: str, custom_label: str | None = None) -> str:
+    if custom_label:
+        return custom_label
+    return next((lab for k, lab, _ in ROUNDS if k == kind), 'Custom round')
 
 
 def spec(kind: str) -> str:
-    return next(s for k, _, s in ROUNDS if k == kind)
+    return next((s for k, _, s in ROUNDS if k == kind),
+                'Write a sharp, concrete question that tests causal understanding of this angle.')
 
 
 async def open_custom(topic: str, notes: str) -> dict:
@@ -477,7 +623,8 @@ JSON shape: {{"brief": "..."}}"""
 
 
 async def generate_question(state: dict, kind: str) -> dict:
-    index = [k for k, _, _ in ROUNDS].index(kind) + 1
+    kinds = [k for k, _, _ in ROUNDS]
+    index = (kinds.index(kind) + 1) if kind in kinds else len(state.get('rounds', [])) + 1
     prompt = (f"{dossier(state)}\n\nTASK\nWrite round {index} ({label(kind)}): {spec(kind)}\n"
               f"JSON shape: {question_shape(kind)}")
     # A planted flaw must be subtle but unambiguous: worth the model's full reasoning.
@@ -488,7 +635,11 @@ async def generate_question(state: dict, kind: str) -> dict:
 def score_cap(rnd: dict, turn: dict) -> int:
     if not turn['answer']:
         return 0
-    return 3 if rnd['kind'] == 'flaw' and turn.get('step') != rnd['flaw_step'] else 10
+    if rnd['kind'] == 'flaw' and turn.get('step') != rnd['flaw_step']:
+        return 3
+    if rnd.get('assisted'):
+        return 7
+    return 10
 
 
 def peek(partial: str, cap: int) -> dict:
@@ -519,6 +670,13 @@ async def grade_turn(state: dict, rnd: dict, turn: dict, *, pushback_allowed: bo
         history = (f"\nEarlier in this round you asked: {first['question']}\nThey answered: "
                    f"{first['answer']}\nYou graded it {first['grade']['score']}/10 and pushed "
                    f"back with the question below.")
+    if rnd.get('coaching'):
+        c = rnd['coaching']
+        steps_txt = '\n'.join(f"  Coach Q: {s['question']}\n  Challenger A: {s.get('answer') or '(pending)'}"
+                              for s in c.get('steps') or [])
+        history += (f"\nBefore answering the main question, the challenger used a stepping-stone "
+                    f"breakdown (Intuition given: {c.get('intuition')}).\n{steps_txt}\n"
+                    f"Grade their synthesis of the main question below honestly.")
     push = ('If the answer scored 3-6 because it was vague, hand-wavy or missing one key piece, '
             'write `pushback`: ONE sharp follow-up that presses on exactly the weak spot (quote '
             'their words, e.g. You said it "scales better": better in what quantity, and why?). '
@@ -526,7 +684,7 @@ async def grade_turn(state: dict, rnd: dict, turn: dict, *, pushback_allowed: bo
             if pushback_allowed else 'Pushback is not allowed now: set pushback to null.')
     prompt = f"""{dossier(state)}
 
-CURRENT ROUND: {label(rnd['kind'])}{history}
+CURRENT ROUND: {rnd.get('label') or label(rnd['kind'])}{history}
 Question: {turn['question']}
 {key}
 Learner's answer:
@@ -550,6 +708,202 @@ Write the keys in exactly this order. JSON shape: {{"score": 0-10, "verdict": \
         # Strong answers need no nudge; wrong ones get the strong answer, not a hint.
         grade['pushback'] = ''
     return grade
+
+
+# --- Challenger Socratic Breakdown (Stepping-Stone Coaching) ---
+
+async def start_breakdown(state: dict, rnd: dict) -> dict:
+    """Give a 2-sentence intuition + 1 small stepping-stone question when a Challenger is stuck."""
+    turn = rnd['turns'][-1]
+    exhibit_txt = ''
+    if rnd['kind'] == 'flaw' and rnd.get('exhibit'):
+        steps = '\n'.join(f"  {i}. {s}" for i, s in enumerate(rnd['exhibit']['steps'], 1))
+        exhibit_txt = f"\nExhibit steps:\n{steps}\n(Do NOT name which step number is flawed; help them reason about the underlying mechanism.)"
+    prompt = f"""{dossier(state)}
+
+BREAKDOWN / STEPPING-STONE REQUEST
+The challenger is on round ({rnd.get('label') or label(rnd['kind'])}) and asked to break this down because they are rusty or stuck.
+Main round question: {turn['question']}{exhibit_txt}
+Private grading key: {rnd['rubric']}
+
+Instead of dumping the full answer on them, teach Socratically:
+1. Write `intuition`: 1-2 plain, concrete sentences that give the core mental model or definition they need, WITHOUT giving away the direct answer to the main question.
+2. Write `stepping_stone`: ONE small, concrete warm-up question that helps them derive the key mechanism themselves in 1 sentence.
+3. Write `concept`: short label (under 60 chars) of the specific idea being unpacked.
+JSON shape: {{"intuition": "...", "stepping_stone": "...", "concept": "..."}}"""
+
+    def validate(raw):
+        if not text(raw.get('intuition')) or not text(raw.get('stepping_stone')):
+            raise ValueError('missing breakdown')
+        return {
+            'intuition': text(raw['intuition'], 600),
+            'concept': text(raw.get('concept'), 100) or state['title'],
+            'steps': [{'question': text(raw['stepping_stone'], 600), 'answer': None, 'feedback': None}],
+            'ready_for_main': False,
+        }
+
+    return await complete(prompt, validate, max_tokens=1000)
+
+
+async def step_breakdown(state: dict, rnd: dict, challenger_reply: str) -> dict:
+    """Respond to a Challenger's stepping-stone answer; either ask 1 more small question or send them back to the main question."""
+    coaching = rnd['coaching']
+    turn = rnd['turns'][-1]
+    steps_log = '\n'.join(
+        f"Step {i}: Coach asked: {s['question']}\nChallenger answered: {s['answer'] or challenger_reply}"
+        for i, s in enumerate(coaching['steps'], 1)
+    )
+    can_ask_more = len(coaching['steps']) < 2
+    prompt = f"""{dossier(state)}
+
+STEPPING-STONE COACHING IN PROGRESS
+Main round question: {turn['question']}
+Private grading key: {rnd['rubric']}
+Initial intuition given: {coaching['intuition']}
+{steps_log}
+
+TASK
+1. Write `feedback`: 1-2 direct, plain sentences on their stepping-stone answer. Confirm what is right or state clearly the missing piece. No praise padding.
+2. Decide `ready_for_main` (boolean): true if they now have the pieces to answer the main round question in their own words{'' if can_ask_more else ' (MUST be true now because this was the second stepping stone)'}.
+3. If `ready_for_main` is false, write `next_question`: one final small stepping-stone question to lock in the missing piece. Otherwise set `next_question` to null.
+JSON shape: {{"feedback": "...", "ready_for_main": true|false, "next_question": null or "..."}}"""
+
+    def validate(raw):
+        fb = text(raw.get('feedback'), 600)
+        if not fb:
+            raise ValueError('missing coaching feedback')
+        ready = bool(raw.get('ready_for_main')) or not can_ask_more
+        nxt = text(raw.get('next_question'), 600) if not ready else ''
+        if not nxt:
+            ready = True
+        return {'feedback': fb, 'ready_for_main': ready, 'next_question': nxt}
+
+    return await complete(prompt, validate, max_tokens=1000)
+
+
+# --- Fight Creator Studio (Drafting, Editing, Regenerating, Auditing Blueprints) ---
+
+def clean_blueprint_round(raw: dict, index: int) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError(f'bad round {index}')
+    kind = text(raw.get('kind'), 30) or 'explain'
+    if kind not in ('explain', 'perturb', 'flaw', 'apply', 'retest', 'custom'):
+        kind = 'custom'
+    lab = text(raw.get('label'), 80) or label(kind)
+    if kind == 'retest' and not text(raw.get('prompt')):
+        return {'kind': 'retest', 'label': lab, 'prompt': '', 'rubric': text(raw.get('rubric'), 3000)}
+    q = clean_question(raw, 'flaw' if kind == 'flaw' else ('retest' if kind == 'retest' else 'explain'))
+    return {'kind': kind, 'label': lab, **q}
+
+
+async def draft_blueprint(topic: str, *, level: str, taste_prompt: str, notes: str) -> dict:
+    prompt = f"""DESIGN A COMPLETE FIGHT BLUEPRINT
+A creator is designing a Kenjitsu fight on:
+Topic: <topic>{topic}</topic>
+Target level: {level or 'Core'}
+{f"Creator's teaching direction & taste (FOLLOW THIS CLOSELY):{chr(10)}<taste>{chr(10)}{taste_prompt}{chr(10)}</taste>" if taste_prompt else 'No specific taste prompt provided; use the standard 5-round progression.'}
+{f"Reference notes / source text:{chr(10)}<notes>{chr(10)}{notes}{chr(10)}</notes>" if notes else ''}
+
+Design a complete fight blueprint that forces challengers to think through the causal mechanisms rather than recite jargon:
+- `title`: concise title under 60 characters
+- `category`: one of "Interviews", "Courses", "Exams", "AI & ML", "Law & Policy", "Science", "Community"
+- `source`: short domain/course/book label under 60 characters
+- `blurb`: 1-sentence hook explaining what this fight tests (under 160 characters)
+- `brief`: 80-160 word examiner's brief (core mechanisms, common misconceptions, good knobs to turn)
+- `rounds`: a list of 5 rounds. Unless the creator's taste prompt asks for a different custom sequence of rounds, use:
+  1. `kind`: "explain", `label`: "Explain it simply" — {spec('explain')}
+  2. `kind`: "perturb", `label`: "What if it changes?" — {spec('perturb')}
+  3. `kind`: "flaw", `label`: "Find the flaw" — {spec('flaw')} (MUST include `"exhibit": {{"title": "...", "steps": ["step 1", "step 2", "step 3", "step 4"]}}` with 3-6 steps and `"flaw_step": <1-based int>`)
+  4. `kind`: "apply", `label`: "New case" — {spec('apply')}
+  5. `kind`: "retest", `label`: "Rematch" — set `"prompt": ""` and `"rubric": "Adaptive rematch targeting the challenger's weakest round"` (unless the creator asked for a specific fixed final round).
+If the creator asked for custom angles or rounds in `<taste>`, you may customize each round's `label`, `kind` ("explain", "perturb", "flaw", "apply", or "custom"), `prompt`, and `rubric` to match their taste!
+
+JSON shape: {{"title": "...", "category": "...", "source": "...", "blurb": "...", "brief": "...", "rounds": [{{"kind": "explain|perturb|flaw|apply|custom|retest", "label": "...", "prompt": "...", "rubric": "...", "exhibit": null or {{"title": "...", "steps": [...]}}, "flaw_step": null or 1}}]}}"""
+
+    def validate(raw):
+        title = text(raw.get('title'), 80)
+        raw_rounds = raw.get('rounds')
+        if not title or not isinstance(raw_rounds, list) or len(raw_rounds) < 2:
+            raise ValueError('invalid blueprint draft')
+        rounds = [clean_blueprint_round(r, i) for i, r in enumerate(raw_rounds[:8], 1)]
+        return {
+            'title': title,
+            'category': text(raw.get('category'), 40) or 'Community',
+            'source': text(raw.get('source'), 80) or 'Custom fight',
+            'level': text(level, 60) or 'Core',
+            'blurb': text(raw.get('blurb'), 200),
+            'taste_prompt': text(taste_prompt, 4000),
+            'brief': text(raw.get('brief'), 3000),
+            'rounds': rounds,
+        }
+
+    return await complete(prompt, validate, max_tokens=4000, effort=None)
+
+
+async def regen_blueprint_round(body: dict) -> dict:
+    kind = text(body.get('kind'), 30) or 'explain'
+    if kind not in ('explain', 'perturb', 'flaw', 'apply', 'retest', 'custom'):
+        kind = 'custom'
+    lab = text(body.get('label'), 80) or label(kind)
+    prompt = f"""REWRITE ONE FIGHT ROUND
+Fight title: {body.get('title') or 'Untitled'} ({body.get('source') or 'General'} · Level: {body.get('level') or 'Core'})
+Examiner's brief: {body.get('brief') or '(none)'}
+Creator's overall taste direction: {body.get('taste_prompt') or '(none)'}
+{f"Current round draft to improve or replace:{chr(10)}{body.get('current_prompt')}" if body.get('current_prompt') else ''}
+Creator's specific instruction for this round: {body.get('instruction') or f'Write a sharper {lab} round.'}
+
+Round kind: {kind} ({lab})
+Default spec for this kind: {spec(kind)}
+Write the updated round with a clear, unambiguous `prompt`, a concrete `rubric`, and `label`.
+{('Include `"exhibit": {"title": "...", "steps": [...]}` (3-6 steps) and `"flaw_step": <1-based index>`.' if kind == 'flaw' else '')}
+JSON shape: {{"label": "{lab}", "prompt": "...", "rubric": "..."{', "exhibit": {"title": "...", "steps": ["..."]}, "flaw_step": 2' if kind == 'flaw' else ''}}}"""
+
+    def validate(raw):
+        raw['kind'] = kind
+        if not raw.get('label'):
+            raw['label'] = lab
+        return clean_blueprint_round(raw, 1)
+
+    return await complete(prompt, validate, max_tokens=2000, effort=None if kind == 'flaw' else 'low')
+
+
+async def audit_blueprint(body: dict) -> dict:
+    rounds_desc = []
+    for i, r in enumerate(body.get('rounds') or [], 1):
+        ex = f"\n  Exhibit (flaw_step={r.get('flaw_step')}): {r.get('exhibit')}" if r.get('kind') == 'flaw' else ''
+        rounds_desc.append(f"Round {i} [{r.get('kind')} — {r.get('label')}]:\n  Prompt: {r.get('prompt')}\n  Rubric: {r.get('rubric')}{ex}")
+    prompt = f"""QUALITY & TASTE AUDIT OF A FIGHT BLUEPRINT
+Title: {body.get('title')} (Level: {body.get('level') or 'Core'})
+Creator's taste direction: {body.get('taste_prompt') or '(standard)'}
+Brief: {body.get('brief') or '(none)'}
+
+ROUNDS:
+{chr(10).join(rounds_desc)}
+
+Check every round for:
+1. Ambiguity or trick wording where a knowledgeable challenger could misread what is asked.
+2. Rubric quality: does the rubric test causal mechanism rather than buzzwords?
+3. For `flaw` rounds: is the flawed step genuinely subtle yet unambiguously wrong, and are all other steps solid?
+4. Alignment with the target level and the creator's taste direction.
+
+JSON shape: {{"overall": "sharp" or "needs_polish", "summary": "1-2 direct sentences", "round_notes": [{{"round": 1, "status": "ok" or "warn", "note": "1-2 direct sentences on how to tighten this round or why it works"}}]}}"""
+
+    def validate(raw):
+        notes = []
+        for item in raw.get('round_notes') or []:
+            if isinstance(item, dict):
+                notes.append({
+                    'round': int(item.get('round') or 1),
+                    'status': 'warn' if item.get('status') == 'warn' else 'ok',
+                    'note': text(item.get('note'), 400),
+                })
+        return {
+            'overall': 'needs_polish' if raw.get('overall') == 'needs_polish' else 'sharp',
+            'summary': text(raw.get('summary'), 500) or 'Audit complete.',
+            'round_notes': notes,
+        }
+
+    return await complete(prompt, validate, max_tokens=1800)
 
 
 # --- Subjects: progress across fights ---
@@ -812,19 +1166,24 @@ def start_subject_work(subject_id: str, uid: str) -> None:
 
 # --- Sessions ---
 
-def new_round(kind: str, question: dict | None = None, *, revealed: bool = False) -> dict:
+def new_round(kind: str, question: dict | None = None, *, revealed: bool = False,
+              custom_label: str | None = None) -> dict:
     # A round's question stays hidden, and its clock stopped, until the learner asks for it.
     rnd = {'kind': kind, 'score': None, 'revealed': revealed, 'pending': True, 'turns': []}
-    if question:
+    if custom_label:
+        rnd['label'] = custom_label
+    if question and question.get('prompt'):
         fill_round(rnd, question)
     return rnd
 
 
 def fill_round(rnd: dict, question: dict) -> None:
-    rnd.update(pending=False, rubric=question['rubric'], turns=[
+    if question.get('label') and not rnd.get('label'):
+        rnd['label'] = question['label']
+    rnd.update(pending=False, rubric=question.get('rubric', ''), turns=[
         {'question': question['prompt'], 'shown_ms': now_ms() if rnd['revealed'] else None}])
     for key in ('exhibit', 'flaw_step', 'targets'):
-        if key in question:
+        if key in question and question[key] is not None:
             rnd[key] = question[key]
 
 
@@ -857,7 +1216,7 @@ def save(state: dict) -> None:
 
 
 def standing(module: str, score: int, thinking_ms: int, sid: str) -> dict:
-    if module not in MODULES:
+    if module not in MODULES and not str(module).startswith('bp:'):
         return {'percentile': None, 'others': 0}
     with closing(connect()) as conn:
         rows = conn.execute("SELECT score, thinking_ms FROM sessions WHERE module = ? AND "
@@ -870,26 +1229,38 @@ def standing(module: str, score: int, thinking_ms: int, sid: str) -> dict:
 
 def finish(state: dict) -> None:
     scores = [r['score'] for r in state['rounds']]
-    state['score'] = sum(scores) * 2
+    n = max(1, len(scores))
+    state['score'] = sum(scores) * 2 if n == 5 else round(sum(scores) * 10 / n)
     # Passing needs a strong total and a won rematch: proof the weak spot was fixed.
     state['passed'] = state['score'] >= PASS_SCORE and scores[-1] >= 6
     state['status'] = 'done'
     state['finished_at'] = now()
 
 
+def total_rounds_for(state: dict) -> int:
+    if state.get('rounds_plan'):
+        return len(state['rounds_plan'])
+    return len(ROUNDS)
+
+
 def public(state: dict) -> dict:
     rounds = []
     for rnd in state['rounds']:
         finished = rnd['score'] is not None
+        rnd_label = rnd.get('label') or label(rnd['kind'])
         if not rnd.get('revealed', True):
-            rounds.append({'kind': rnd['kind'], 'label': label(rnd['kind']), 'score': None,
+            rounds.append({'kind': rnd['kind'], 'label': rnd_label, 'score': None,
                            'done': False, 'revealed': False, 'ready': not rnd.get('pending'),
                            'turns': []})
             continue
-        out = {'kind': rnd['kind'], 'label': label(rnd['kind']), 'score': rnd['score'],
+        out = {'kind': rnd['kind'], 'label': rnd_label, 'score': rnd['score'],
                'done': finished, 'revealed': True, 'exhibit': rnd.get('exhibit'),
                'targets': rnd.get('targets') if finished else None,
                'flaw_step': rnd.get('flaw_step') if finished else None, 'turns': []}
+        if rnd.get('coaching'):
+            out['coaching'] = rnd['coaching']
+        if rnd.get('assisted'):
+            out['assisted'] = True
         for turn in rnd['turns']:
             grade = dict(turn['grade']) if turn.get('grade') else None
             if grade:
@@ -907,13 +1278,20 @@ def public(state: dict) -> dict:
                   'thinking_ms': state['thinking_ms'], 'gaps': weak[:8],
                   **standing(state['module'], state['score'], state['thinking_ms'], state['id'])}
     focus = state.get('focus') or dict(CORE, variant='first')
-    return {'id': state['id'], 'module': state['module'], 'title': state['title'],
-            'subject': state.get('subject'),
-            'focus': {k: focus.get(k) for k in ('id', 'title', 'variant')},
-            'source': state.get('source'), 'status': state['status'],
-            'started_at': state['started_at'], 'thinking_ms': state.get('thinking_ms', 0),
-            'rounds': rounds, 'total_rounds': len(ROUNDS), 'result': result,
-            'pass_score': PASS_SCORE}
+    pub = {'id': state['id'], 'module': state['module'], 'title': state['title'],
+           'subject': state.get('subject'),
+           'focus': {k: focus.get(k) for k in ('id', 'title', 'variant')},
+           'source': state.get('source'), 'status': state['status'],
+           'started_at': state['started_at'], 'thinking_ms': state.get('thinking_ms', 0),
+           'rounds': rounds, 'total_rounds': total_rounds_for(state), 'result': result,
+           'pass_score': PASS_SCORE}
+    if state.get('blueprint_id'):
+        pub['blueprint_id'] = state['blueprint_id']
+    if state.get('level'):
+        pub['level'] = state['level']
+    if state.get('user_vote') is not None:
+        pub['user_vote'] = state['user_vote']
+    return pub
 
 
 def user_id(request: Request, response: Response) -> str:
@@ -928,6 +1306,7 @@ def user_id(request: Request, response: Response) -> str:
 
 class StartRequest(BaseModel):
     module: str | None = None
+    blueprint: str | None = None
     topic: str | None = Field(default=None, max_length=300)
     notes: str | None = Field(default=None, max_length=NOTES_LIMIT * 2)
     subject: str | None = None
@@ -938,6 +1317,48 @@ class StartRequest(BaseModel):
 class AnswerRequest(BaseModel):
     answer: str = Field(default='', max_length=ANSWER_LIMIT * 2)
     step: int | None = None
+
+
+class BreakdownRequest(BaseModel):
+    answer: str = Field(default='', max_length=ANSWER_LIMIT)
+
+
+class RateRequest(BaseModel):
+    vote: int = Field(default=1)
+    comment: str = Field(default='', max_length=500)
+
+
+class DraftBlueprintRequest(BaseModel):
+    topic: str = Field(default='', max_length=300)
+    level: str = Field(default='Core', max_length=60)
+    taste_prompt: str = Field(default='', max_length=4000)
+    notes: str = Field(default='', max_length=NOTES_LIMIT * 2)
+
+
+class RegenRoundRequest(BaseModel):
+    title: str = Field(default='', max_length=120)
+    source: str = Field(default='', max_length=120)
+    level: str = Field(default='Core', max_length=60)
+    brief: str = Field(default='', max_length=3000)
+    taste_prompt: str = Field(default='', max_length=4000)
+    kind: str = Field(default='explain', max_length=30)
+    label: str = Field(default='', max_length=80)
+    current_prompt: str = Field(default='', max_length=3000)
+    instruction: str = Field(default='', max_length=1000)
+
+
+class SaveBlueprintRequest(BaseModel):
+    parent_id: str | None = None
+    title: str = Field(max_length=100)
+    category: str = Field(default='Community', max_length=50)
+    source: str = Field(default='', max_length=100)
+    level: str = Field(default='Core', max_length=60)
+    blurb: str = Field(default='', max_length=240)
+    taste_prompt: str = Field(default='', max_length=4000)
+    brief: str = Field(default='', max_length=4000)
+    notes: str = Field(default='', max_length=NOTES_LIMIT)
+    rounds: list[dict]
+    published: bool = True
 
 
 @app.get('/health')
@@ -961,13 +1382,37 @@ def modules():
         stats = {r['module']: r for r in conn.execute(
             "SELECT module, COUNT(*) AS n, SUM(passed) AS passed FROM sessions "
             "WHERE status = 'done' GROUP BY module")}
+        bp_rows = conn.execute(
+            "SELECT * FROM blueprints WHERE published = 1 ORDER BY upvotes - downvotes DESC, updated_at DESC LIMIT 60"
+        ).fetchall()
+    community = []
+    for row in bp_rows:
+        bp_mod = f"bp:{row['id']}"
+        rounds_list = json.loads(row['rounds_json'])
+        opener = rounds_list[0].get('prompt', '') if rounds_list else ''
+        community.append({
+            'id': row['id'],
+            'blueprint': True,
+            'parent_id': row['parent_id'],
+            'title': row['title'],
+            'category': row['category'] or 'Community',
+            'source': row['source'],
+            'level': row['level'] or 'Core',
+            'blurb': row['blurb'] or (opener[:140] + ('…' if len(opener) > 140 else '')),
+            'opener': opener,
+            'total_rounds': len(rounds_list),
+            'upvotes': row['upvotes'],
+            'downvotes': row['downvotes'],
+            'attempts': stats[bp_mod]['n'] if bp_mod in stats else 0,
+            'passed': (stats[bp_mod]['passed'] or 0) if bp_mod in stats else 0,
+        })
     return {'rounds': [{'kind': k, 'label': lab} for k, lab, _ in ROUNDS], 'modules': [
         # The opener is the same for everyone, so the browser can show it before the
         # session exists.
         {key: m[key] for key in ('id', 'title', 'category', 'source', 'blurb', 'opener')}
         | {'attempts': stats[m['id']]['n'] if m['id'] in stats else 0,
            'passed': (stats[m['id']]['passed'] or 0) if m['id'] in stats else 0}
-        for m in MODULES.values()]}
+        for m in MODULES.values()], 'blueprints': community}
 
 
 @app.post('/api/sessions')
@@ -980,6 +1425,8 @@ async def start(body: StartRequest, request: Request, response: Response):
         raise HTTPException(429, 'That is enough fighting for one day. Come back tomorrow.')
     if body.subject:
         state = await start_in_subject(body, request, uid)
+    elif body.blueprint:
+        state = start_blueprint(body.blueprint, uid)
     elif body.module:
         state = start_module(body.module, uid)
     else:
@@ -989,11 +1436,44 @@ async def start(body: StartRequest, request: Request, response: Response):
         spawn(prepare_custom(state['id'], uid))  # Plans the subject after.
     else:
         plan_prefetch(state)
-        start_subject_work(state['subject'], uid)
+        if state.get('subject'):
+            start_subject_work(state['subject'], uid)
     emit('session_started', session=state['id'], module=state['module'],
          focus=state['focus']['id'], variant=state['focus']['variant'],
          has_notes=bool(state.get('notes')), notes_chars=len(state.get('notes') or ''))
     return public(state)
+
+
+def start_blueprint(bp_id: str, uid: str) -> dict:
+    with closing(connect()) as conn, conn:
+        row = conn.execute('SELECT * FROM blueprints WHERE id = ?', (bp_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, 'Fight blueprint not found.')
+        rounds_plan = json.loads(row['rounds_json'])
+        if not rounds_plan:
+            raise HTTPException(422, 'Blueprint has no rounds.')
+        bp_mod = f'bp:{bp_id}'
+        sub_row = conn.execute('SELECT * FROM subjects WHERE uid = ? AND module = ?',
+                               (uid, bp_mod)).fetchone()
+        if sub_row:
+            subject = subject_row(sub_row)
+        else:
+            subject = create_subject(conn, uid, module=bp_mod, title=row['title'],
+                                     source=row['source'], brief=row['brief'], notes=row['notes'])
+        tried = conn.execute("SELECT 1 FROM sessions WHERE subject = ? AND focus = 'core'",
+                             (subject['id'],)).fetchone()
+    first = rounds_plan[0]
+    state = {
+        'id': secrets.token_urlsafe(9), 'uid': uid, 'status': 'active',
+        'started_at': now(), 'thinking_ms': 0, 'subject': subject['id'],
+        'module': bp_mod, 'blueprint_id': bp_id, 'title': row['title'],
+        'source': row['source'], 'level': row['level'], 'taste_prompt': row['taste_prompt'],
+        'brief': row['brief'], 'notes': row['notes'],
+        'rounds_plan': rounds_plan,
+        'focus': dict(CORE, variant='again' if tried else 'first'),
+    }
+    state['rounds'] = [new_round(first['kind'], first, revealed=True, custom_label=first.get('label'))]
+    return state
 
 
 def start_module(module_id: str, uid: str) -> dict:
@@ -1119,6 +1599,22 @@ def plan_prefetch(state: dict) -> None:
     written = {r['kind'] for r in state['rounds'] if not r.get('pending')}
     tasks, ready = prefetching.get(sid, {}), drafts.get(sid, {})
     graded = graded_scores(state)
+    if state.get('rounds_plan'):
+        # Blueprint rounds with a prompt are already written; only prefetch an empty adaptive retest.
+        plan_list = state['rounds_plan']
+        for item in plan_list[1:]:
+            if item.get('prompt'):
+                continue
+            kind = item['kind']
+            if kind == 'retest' and len(graded) < max(1, len(plan_list) - 2):
+                continue
+            if kind in written or kind in ready or kind in tasks:
+                continue
+            basis = graded if kind == 'retest' else None
+            task = spawn(prefetch(sid, state['uid'], kind, copy.deepcopy(state), basis))
+            prefetching.setdefault(sid, {})[kind] = (task, basis)
+            task.add_done_callback(lambda t, kind=kind: forget(sid, kind, t))
+        return
     for kind, _, _ in ROUNDS[1:]:
         if kind in written:
             continue
@@ -1221,7 +1717,9 @@ async def run_answer(state: dict, body: AnswerRequest, events: asyncio.Queue,
         rnd = state['rounds'][-1]
         turn = rnd['turns'][-1]
         index = len(state['rounds'])
-        next_kind = ROUNDS[index][0] if index < len(ROUNDS) else None
+        plan_list = state.get('rounds_plan')
+        total = len(plan_list) if plan_list else len(ROUNDS)
+        next_kind = (plan_list[index]['kind'] if plan_list else ROUNDS[index][0]) if index < total else None
         submitted = now_ms()
         turn['answer'] = text(body.answer, ANSWER_LIMIT)
         turn['step'] = body.step if rnd['kind'] == 'flaw' else None
@@ -1248,10 +1746,16 @@ async def run_answer(state: dict, body: AnswerRequest, events: asyncio.Queue,
         if grade['pushback']:
             rnd['turns'].append({'question': grade['pushback'], 'shown_ms': now_ms()})
         else:
-            # Needing a nudge caps the round: the first answer wasn't enough on its own.
-            rnd['score'] = min(grade['score'], 8) if len(rnd['turns']) > 1 else grade['score']
+            # Needing a nudge caps the round at 8; using stepping-stone breakdown caps at 7.
+            round_cap = 7 if rnd.get('assisted') else (8 if len(rnd['turns']) > 1 else 10)
+            rnd['score'] = min(grade['score'], round_cap)
             if next_kind:
-                state['rounds'].append(new_round(next_kind, take_draft(state, next_kind)))
+                if plan_list:
+                    planned = plan_list[index]
+                    q_ready = planned if planned.get('prompt') else take_draft(state, next_kind)
+                    state['rounds'].append(new_round(next_kind, q_ready, custom_label=planned.get('label')))
+                else:
+                    state['rounds'].append(new_round(next_kind, take_draft(state, next_kind)))
             else:
                 finish(state)
         save(state)
@@ -1318,6 +1822,255 @@ async def answer(sid: str, body: AnswerRequest, request: Request, response: Resp
 
     return StreamingResponse(sse(), media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.post('/api/sessions/{sid}/breakdown')
+async def breakdown(sid: str, body: BreakdownRequest, request: Request, response: Response):
+    """Socratic stepping-stone breakdown when a Challenger is rusty or stuck on a round."""
+    uid = user_id(request, response)
+    async with locks[sid]:
+        state = load(sid, uid)
+        if state['status'] != 'active':
+            raise HTTPException(409, 'This session is over.')
+        rnd = state['rounds'][-1]
+        if not rnd.get('revealed', True) or rnd['score'] is not None:
+            raise HTTPException(409, 'Round is not active.')
+        reply = text(body.answer, ANSWER_LIMIT)
+        if not rnd.get('coaching'):
+            spend_call(uid, client_ip(request))
+            rnd['assisted'] = True
+            rnd['coaching'] = await start_breakdown(state, rnd)
+            save(state)
+            emit('breakdown_started', session=sid, round=rnd['kind'])
+            return public(state)
+        coaching = rnd['coaching']
+        if coaching.get('ready_for_main'):
+            raise HTTPException(409, 'Stepping stones complete; answer the main question above.')
+        if not reply:
+            raise HTTPException(422, 'Write a short answer to the stepping-stone question.')
+        spend_call(uid, client_ip(request))
+        step_res = await step_breakdown(state, rnd, reply)
+        coaching['steps'][-1]['answer'] = reply
+        coaching['steps'][-1]['feedback'] = step_res['feedback']
+        coaching['ready_for_main'] = step_res['ready_for_main']
+        if not step_res['ready_for_main'] and step_res.get('next_question'):
+            coaching['steps'].append({'question': step_res['next_question'], 'answer': None, 'feedback': None})
+        save(state)
+        return public(state)
+
+
+@app.post('/api/sessions/{sid}/rate')
+def rate_session(sid: str, body: RateRequest, request: Request, response: Response):
+    """Let a Challenger rate the fight's quality (taste signal)."""
+    uid = user_id(request, response)
+    vote = 1 if body.vote > 0 else -1
+    state = load(sid, uid)
+    target = state.get('blueprint_id') or state['module']
+    with closing(connect()) as conn, conn:
+        prev = conn.execute('SELECT vote FROM fight_ratings WHERE uid = ? AND target_id = ?',
+                            (uid, target)).fetchone()
+        conn.execute('''INSERT INTO fight_ratings (uid, target_id, vote, comment, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(uid, target_id) DO UPDATE SET
+                        vote=excluded.vote, comment=excluded.comment, updated_at=excluded.updated_at''',
+                     (uid, target, vote, text(body.comment, 500), now()))
+        if state.get('blueprint_id'):
+            up = conn.execute('SELECT COUNT(*) FROM fight_ratings WHERE target_id = ? AND vote > 0',
+                              (target,)).fetchone()[0]
+            down = conn.execute('SELECT COUNT(*) FROM fight_ratings WHERE target_id = ? AND vote < 0',
+                                (target,)).fetchone()[0]
+            conn.execute('UPDATE blueprints SET upvotes = ?, downvotes = ? WHERE id = ?',
+                         (up, down, state['blueprint_id']))
+    state['user_vote'] = vote
+    save(state)
+    return {'ok': True, 'vote': vote}
+
+
+# --- Fight Creator Studio API ---
+
+def blueprint_dict(row: sqlite3.Row, uid: str = '') -> dict:
+    d = dict(row)
+    d['rounds'] = json.loads(d.pop('rounds_json'))
+    d['published'] = bool(d['published'])
+    d['is_owner'] = bool(uid and d.get('uid') == uid)
+    d.pop('uid', None)
+    return d
+
+
+@app.get('/api/blueprints')
+def list_blueprints(request: Request, response: Response):
+    uid = user_id(request, response)
+    with closing(connect()) as conn:
+        rows = conn.execute(
+            'SELECT * FROM blueprints WHERE published = 1 OR uid = ? ORDER BY updated_at DESC LIMIT 60',
+            (uid,)
+        ).fetchall()
+    return {'blueprints': [blueprint_dict(r, uid) for r in rows]}
+
+
+@app.get('/api/blueprints/{bp_id}')
+def get_blueprint(bp_id: str, request: Request, response: Response):
+    uid = user_id(request, response)
+    with closing(connect()) as conn:
+        row = conn.execute('SELECT * FROM blueprints WHERE id = ?', (bp_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, 'Blueprint not found.')
+    return blueprint_dict(row, uid)
+
+
+@app.get('/api/blueprints/fork/{target_id}')
+def fork_target(target_id: str, request: Request, response: Response):
+    """Load any built-in module, community blueprint, or session into the Creator Studio."""
+    uid = user_id(request, response)
+    if target_id.startswith('bp:'):
+        target_id = target_id[3:]
+    with closing(connect()) as conn:
+        bp_row = conn.execute('SELECT * FROM blueprints WHERE id = ?', (target_id,)).fetchone()
+        if bp_row:
+            bp = blueprint_dict(bp_row, uid)
+            bp['parent_id'] = bp.pop('id')
+            bp['title'] = f"{bp['title']}"
+            return bp
+        if target_id in MODULES:
+            m = MODULES[target_id]
+            # Check if any session on this module has already generated rounds 2-4 so we can prefill them.
+            sess_row = conn.execute(
+                "SELECT state FROM sessions WHERE module = ? ORDER BY length(state) DESC LIMIT 1",
+                (target_id,)
+            ).fetchone()
+            rounds = [{'kind': 'explain', 'label': label('explain'), 'prompt': m['opener'], 'rubric': m['rubric']}]
+            if sess_row:
+                st = json.loads(sess_row['state'])
+                for r in st.get('rounds', [])[1:]:
+                    if not r.get('pending') and r.get('turns'):
+                        item = {'kind': r['kind'], 'label': r.get('label') or label(r['kind']),
+                                'prompt': r['turns'][0]['question'], 'rubric': r.get('rubric', '')}
+                        for k in ('exhibit', 'flaw_step', 'targets'):
+                            if r.get(k) is not None:
+                                item[k] = r[k]
+                        rounds.append(item)
+            existing_kinds = {r['kind'] for r in rounds}
+            for k, lab, _ in ROUNDS[1:]:
+                if k not in existing_kinds:
+                    rounds.append({'kind': k, 'label': lab, 'prompt': '',
+                                   'rubric': 'Adaptive rematch targeting weakest round' if k == 'retest' else ''})
+            return {
+                'parent_id': target_id,
+                'title': m['title'],
+                'category': m['category'],
+                'source': m['source'],
+                'level': 'Core',
+                'blurb': m['blurb'],
+                'taste_prompt': '',
+                'brief': m['brief'],
+                'notes': '',
+                'rounds': rounds,
+                'published': True,
+            }
+        sess_row = conn.execute('SELECT state FROM sessions WHERE id = ?', (target_id,)).fetchone()
+        if sess_row:
+            st = json.loads(sess_row['state'])
+            rounds = []
+            for r in st.get('rounds', []):
+                if r.get('turns'):
+                    item = {'kind': r['kind'], 'label': r.get('label') or label(r['kind']),
+                            'prompt': r['turns'][0]['question'], 'rubric': r.get('rubric', '')}
+                    for k in ('exhibit', 'flaw_step', 'targets'):
+                        if r.get(k) is not None:
+                            item[k] = r[k]
+                    rounds.append(item)
+            return {
+                'parent_id': st.get('blueprint_id') or st.get('module'),
+                'title': st['title'],
+                'category': 'Community',
+                'source': st.get('source') or '',
+                'level': st.get('level') or 'Core',
+                'blurb': '',
+                'taste_prompt': st.get('taste_prompt') or '',
+                'brief': st.get('brief') or '',
+                'notes': st.get('notes') or '',
+                'rounds': rounds,
+                'published': True,
+            }
+    raise HTTPException(404, 'Target fight not found.')
+
+
+@app.post('/api/blueprints/draft')
+async def api_draft_blueprint(body: DraftBlueprintRequest, request: Request, response: Response):
+    uid = user_id(request, response)
+    topic = text(body.topic, 300)
+    notes = text(body.notes, NOTES_LIMIT)
+    taste = text(body.taste_prompt, 4000)
+    if len(topic) < 2 and len(notes) < 20:
+        raise HTTPException(422, 'Enter a topic or paste reference notes to draft a fight.')
+    spend_call(uid, client_ip(request))
+    draft = await draft_blueprint(topic or 'Material in notes', level=body.level,
+                                  taste_prompt=taste, notes=notes)
+    draft['notes'] = notes
+    return draft
+
+
+@app.post('/api/blueprints/regenerate-round')
+async def api_regen_round(body: RegenRoundRequest, request: Request, response: Response):
+    uid = user_id(request, response)
+    spend_call(uid, client_ip(request))
+    return await regen_blueprint_round(body.model_dump())
+
+
+@app.post('/api/blueprints/audit')
+async def api_audit_blueprint(body: SaveBlueprintRequest, request: Request, response: Response):
+    uid = user_id(request, response)
+    spend_call(uid, client_ip(request))
+    return await audit_blueprint(body.model_dump())
+
+
+@app.post('/api/blueprints')
+def save_new_blueprint(body: SaveBlueprintRequest, request: Request, response: Response):
+    uid = user_id(request, response)
+    title = text(body.title, 100)
+    if not title or not body.rounds:
+        raise HTTPException(422, 'A fight needs a title and at least one round.')
+    cleaned_rounds = [clean_blueprint_round(r, i) for i, r in enumerate(body.rounds[:10], 1)]
+    bp_id = secrets.token_urlsafe(8)
+    ts = now()
+    with closing(connect()) as conn, conn:
+        conn.execute('''INSERT INTO blueprints
+                        (id, uid, parent_id, title, category, source, level, blurb, taste_prompt,
+                         brief, notes, rounds_json, published, upvotes, downvotes, created_at, updated_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)''',
+                     (bp_id, uid, body.parent_id, title, text(body.category, 50) or 'Community',
+                      text(body.source, 100), text(body.level, 60) or 'Core',
+                      text(body.blurb, 240), text(body.taste_prompt, 4000),
+                      text(body.brief, 4000), text(body.notes, NOTES_LIMIT),
+                      json.dumps(cleaned_rounds), int(body.published), ts, ts))
+        row = conn.execute('SELECT * FROM blueprints WHERE id = ?', (bp_id,)).fetchone()
+    return blueprint_dict(row, uid)
+
+
+@app.put('/api/blueprints/{bp_id}')
+def update_existing_blueprint(bp_id: str, body: SaveBlueprintRequest, request: Request, response: Response):
+    uid = user_id(request, response)
+    title = text(body.title, 100)
+    if not title or not body.rounds:
+        raise HTTPException(422, 'A fight needs a title and at least one round.')
+    cleaned_rounds = [clean_blueprint_round(r, i) for i, r in enumerate(body.rounds[:10], 1)]
+    with closing(connect()) as conn, conn:
+        existing = conn.execute('SELECT * FROM blueprints WHERE id = ?', (bp_id,)).fetchone()
+        if not existing:
+            raise HTTPException(404, 'Blueprint not found.')
+        if existing['uid'] != uid:
+            # Fork automatically if edited by someone else!
+            return save_new_blueprint(body, request, response)
+        conn.execute('''UPDATE blueprints SET title=?, category=?, source=?, level=?, blurb=?,
+                        taste_prompt=?, brief=?, notes=?, rounds_json=?, published=?, updated_at=?
+                        WHERE id=?''',
+                     (title, text(body.category, 50) or 'Community', text(body.source, 100),
+                      text(body.level, 60) or 'Core', text(body.blurb, 240),
+                      text(body.taste_prompt, 4000), text(body.brief, 4000),
+                      text(body.notes, NOTES_LIMIT), json.dumps(cleaned_rounds),
+                      int(body.published), now(), bp_id))
+        row = conn.execute('SELECT * FROM blueprints WHERE id = ?', (bp_id,)).fetchone()
+    return blueprint_dict(row, uid)
 
 
 def subject_summary(subject: dict, history: list[dict]) -> dict:
